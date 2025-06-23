@@ -14,7 +14,7 @@ from datetime import datetime
 import time
 
 # Configuration
-API_BASE_URL = "http://localhost:8001"
+API_BASE_URL = "http://localhost:8000"
 
 # Page configuration
 st.set_page_config(
