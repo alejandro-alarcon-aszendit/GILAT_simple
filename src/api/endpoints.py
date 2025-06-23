@@ -331,17 +331,12 @@ class SummaryEndpoints:
             "enable_reflection": False
         }
         
-        # We need to temporarily modify the unified graph to handle direct docs
-        # For now, let's use a simpler approach with the strategy functions directly
-        from src.graphs.unified_summary_reflection import _extractive_summarization, _abstractive_summarization, _hybrid_summarization
+        # Use the strategy functions from the utility module
+        from src.utils.summarization_strategies import get_strategy_function
         
         # Generate summary using strategy
-        if strategy == "extractive":
-            summary_result = _extractive_summarization(docs, query or "")
-        elif strategy == "hybrid":
-            summary_result = _hybrid_summarization(docs, query or "")
-        else:  # default to abstractive
-            summary_result = _abstractive_summarization(docs, query or "")
+        strategy_function = get_strategy_function(strategy)
+        summary_result = strategy_function(docs, query or "")
         
         summary = summary_result.get("summary", "Unable to generate summary.")
         

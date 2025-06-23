@@ -210,30 +210,40 @@ Mock LLM via `langchain.chat_models.fake.FakeListChatModel` for CI.
 
 ---
 
-## 🏗️ System Architecture 
+## 🏗️ System Architecture
 
-This project uses a **unified graph architecture** powered by **LangGraph's Send API** for optimal parallel processing and state management.
+This project uses a **unified, modular graph architecture** powered by **LangGraph's Send API** for optimal parallel processing and maintainability.
 
-### **🔄 Unified Summary & Reflection Graph** 
-- **File**: `src/graphs/unified_summary_reflection.py`
-- **Purpose**: Handles ALL summarization tasks with strategy support
+### **🔄 Core Components**
+
+#### **📁 `src/graphs/unified_summary_reflection.py`** 
+- **Purpose**: Clean orchestration layer using LangGraph's Send API
 - **Features**: 
-  - ✅ **True parallel processing** via Send API
-  - ✅ **Three summarization strategies**: Abstractive, Extractive, Hybrid
-  - ✅ **Built-in reflection capabilities** for quality improvement
+  - ✅ **Minimal code**: Focus on graph structure and flow
+  - ✅ **True parallel processing** via Send API  
   - ✅ **Automatic result aggregation** and error handling
-  - ✅ **Strategy-aware topic enhancement**
+
+#### **📁 `src/utils/` - Modular Utilities**
+- **`summarization_strategies.py`**: Three summarization strategies with clean interfaces
+- **`reflection_utils.py`**: Summary evaluation and improvement logic
+- **`topic_processing.py`**: Document retrieval and complete topic processing pipeline  
+- **`graph_schemas.py`**: TypedDict schemas for LangGraph state management
 
 ### **📝 Summarization Strategies**
 - **🎨 Abstractive**: AI generates new sentences by paraphrasing content (default)
-- **📋 Extractive**: Selects key sentences directly from original text  
-- **🔗 Hybrid**: Combines both - extracts key content, then refines with AI
+- **📋 Extractive**: Selects key sentences directly from original text using frequency scoring
+- **🔄 Hybrid**: Extracts key sentences, then uses AI to refine and improve them
 
-### **🛠️ Other Components**
-- **Ingestion Graph**: `src/graphs/ingestion.py` - Document processing
-- **API Layer**: `src/api/endpoints.py` - FastAPI endpoints with strategy support
-- **Services**: Document, parallel processing, and web content services
-- **UI**: Streamlit app with strategy selection dropdown
+### **🔍 Quality Assurance**
+- **Built-in reflection**: Evaluates and improves summaries using structured LLM feedback
+- **Conservative editing**: Only uses information explicitly stated in source content
+- **Strategy-aware processing**: Preserves extractive sentence integrity while enhancing others
+
+### **🚀 Performance Features**
+- **Parallel processing**: Multiple topics processed simultaneously via LangGraph Send
+- **Automatic aggregation**: Results collected using `operator.add` reducers  
+- **Resource limits**: Configurable chunk limits and content truncation
+- **Error resilience**: Graceful handling of failures with detailed metadata
 
 © 2025 LangGraph Doc Service • MIT
 
