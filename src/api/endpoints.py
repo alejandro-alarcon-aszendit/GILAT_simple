@@ -139,9 +139,8 @@ class SummaryEndpoints:
     
     @staticmethod
     async def _process_multi_topic(topics, doc_ids, top_k, length, enable_reflection):
-        """Process multiple topics in parallel."""
-        from src.graphs.summary import MULTI_TOPIC_SUMMARY_GRAPH
-        from src.graphs.reflection import MULTI_TOPIC_SUMMARY_WITH_REFLECTION_GRAPH
+        """Process multiple topics in parallel using the unified LangGraph Send API."""
+        from src.graphs.unified_summary_reflection import UNIFIED_SUMMARY_REFLECTION_GRAPH
         
         multi_topic_input = {
             "topics": topics,
@@ -151,11 +150,8 @@ class SummaryEndpoints:
             "enable_reflection": enable_reflection
         }
         
-        # Choose graph based on reflection setting
-        if enable_reflection:
-            result_state = MULTI_TOPIC_SUMMARY_WITH_REFLECTION_GRAPH.invoke(multi_topic_input)
-        else:
-            result_state = MULTI_TOPIC_SUMMARY_GRAPH.invoke(multi_topic_input)
+        # Use the unified graph that handles both summary and reflection with Send API
+        result_state = UNIFIED_SUMMARY_REFLECTION_GRAPH.invoke(multi_topic_input)
         
         summaries = result_state.get("summaries", [])
         parallel_metadata = result_state.get("parallel_processing", {})

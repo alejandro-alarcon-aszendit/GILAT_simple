@@ -57,8 +57,8 @@ def create_app() -> FastAPI:
                 "Question answering"
             ],
             "parallel_workloads": [
-                "Multi-topic summarization (ThreadPoolExecutor)",
-                "Reflection system (parallel evaluation and improvement)",
+                "Multi-topic summarization (LangGraph Send API)",
+                "Reflection system (integrated with Send API)",
                 "Document retrieval (concurrent vector searches)"
             ]
         }
