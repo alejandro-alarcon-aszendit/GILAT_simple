@@ -18,10 +18,6 @@ docling
 # Vector database
 chromadb
 
-# Background task processing
-celery
-redis
-
 # Text processing and utilities
 tiktoken
 numpy
