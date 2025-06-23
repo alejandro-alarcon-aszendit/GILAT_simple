@@ -1,0 +1,31 @@
+# Core web framework and ASGI server
+fastapi
+uvicorn[standard]
+
+# LangChain ecosystem
+langchain
+langchain-openai
+langgraph
+
+# Database and ORM
+sqlmodel
+sqlalchemy
+psycopg2-binary  # PostgreSQL adapter (optional)
+
+# Document processing
+docling
+
+# Vector database
+chromadb
+
+# Background task processing
+celery
+redis
+
+# Text processing and utilities
+tiktoken
+numpy
+
+# Additional dependencies for document handling
+pydantic
+python-dotenv 
