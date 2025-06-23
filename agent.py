@@ -29,8 +29,10 @@ Environment
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -47,7 +49,7 @@ from langchain.chains.summarize import load_summarize_chain
 from langchain.docstore.document import Document
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langgraph.graph import Graph
 from pydantic import BaseModel
 from sqlmodel import Field, Session, SQLModel, create_engine, select
@@ -255,7 +257,172 @@ def build_summary_graph():
     g.set_finish_point("summarise")
     return g.compile()
 
+def build_multi_topic_summary_graph():
+    """LangGraph for processing multiple topics in parallel using map-reduce pattern"""
+    g = Graph()
+    
+    def _map_topics(state):
+        """Map step: For each topic, find relevant documents and prepare for summarization"""
+        topics = state.get("topics", [])
+        doc_ids = state.get("doc_ids", [])
+        top_k = state.get("top_k", 10)
+        
+        if not topics or not doc_ids:
+            return {"topic_docs": []}
+        
+        topic_docs = []
+        for topic in topics:
+            topic_relevant_docs = []
+            for doc_id in doc_ids:
+                try:
+                    vs = load_vectorstore(doc_id)
+                    retrieved = vs.similarity_search(topic.strip(), k=top_k)
+                    topic_relevant_docs.extend(retrieved)
+                except Exception as e:
+                    print(f"Error retrieving docs for topic '{topic}' from doc {doc_id}: {e}")
+                    continue
+            
+            topic_docs.append({
+                "topic": topic.strip(),
+                "docs": topic_relevant_docs,
+                "doc_count": len(topic_relevant_docs)
+            })
+        
+        return {"topic_docs": topic_docs}
+    
+
+    
+    def _reduce_summaries(state):
+        """Reduce step: Generate summary for each topic in TRUE parallel using ThreadPoolExecutor"""
+        import concurrent.futures
+        
+        topic_docs = state.get("topic_docs", [])
+        length = state.get("length", "medium")
+        
+        if not topic_docs:
+            return {"summaries": []}
+        
+        print(f"🚀 Starting parallel processing of {len(topic_docs)} topics...")
+        start_time = time.time()
+        
+        def process_single_topic(topic_data):
+            """Process a single topic synchronously"""
+            topic = topic_data["topic"]
+            docs = topic_data["docs"]
+            topic_start = time.time()
+            
+            print(f"  📝 Processing topic: '{topic}' with {len(docs)} docs...")
+            
+            if not docs:
+                return {
+                    "topic": topic,
+                    "summary": f"No relevant content found for topic: '{topic}'",
+                    "chunks_processed": 0,
+                    "status": "no_content",
+                    "processing_time": time.time() - topic_start
+                }
+            
+            try:
+                # Use the existing summary chain for each topic
+                chain = load_summarize_chain(LLM, chain_type="map_reduce")
+                
+                chain_start = time.time()
+                result = chain.invoke({"input_documents": docs})
+                chain_time = time.time() - chain_start
+                print(f"    ⚡ Chain processing for '{topic}' took {chain_time:.2f}s")
+                
+                # Extract summary text
+                if isinstance(result, dict) and "output_text" in result:
+                    summary_text = result["output_text"]
+                elif isinstance(result, str):
+                    summary_text = result
+                else:
+                    summary_text = str(result) if result else "Unable to generate summary."
+                
+                # Enhance with topic context
+                if summary_text and summary_text != "Unable to generate summary.":
+                    target = {"short": "≈3 sentences", "medium": "≈8 sentences", "long": "≈15 sentences"}[length]
+                    enhanced_prompt = f"""
+                    Create a focused summary about "{topic}" based on the following content. 
+                    Keep it to {target} while emphasizing information most relevant to this specific topic.
+                    
+                    Content:
+                    {summary_text}
+                    """
+                    enhance_start = time.time()
+                    enhanced_result = LLM.invoke(enhanced_prompt)
+                    enhance_time = time.time() - enhance_start
+                    print(f"    ✨ Enhancement for '{topic}' took {enhance_time:.2f}s")
+                    
+                    if hasattr(enhanced_result, 'content'):
+                        summary_text = enhanced_result.content.strip()
+                
+                total_time = time.time() - topic_start
+                print(f"  ✅ Completed topic: '{topic}' in {total_time:.2f}s")
+                
+                return {
+                    "topic": topic,
+                    "summary": summary_text,
+                    "chunks_processed": len(docs),
+                    "status": "success",
+                    "processing_time": total_time
+                }
+                
+            except Exception as e:
+                total_time = time.time() - topic_start
+                print(f"  ❌ Failed topic: '{topic}' in {total_time:.2f}s - {str(e)}")
+                return {
+                    "topic": topic,
+                    "summary": f"Error generating summary for '{topic}': {str(e)}",
+                    "chunks_processed": len(docs),
+                    "status": "error",
+                    "processing_time": total_time
+                }
+        
+        # Process all topics in parallel using ThreadPoolExecutor
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(topic_docs), 5)) as executor:
+            # Submit all tasks
+            futures = [executor.submit(process_single_topic, topic_data) for topic_data in topic_docs]
+            
+            # Collect results as they complete
+            summaries = []
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    result = future.result()
+                    summaries.append(result)
+                except Exception as e:
+                    print(f"  ❌ Task failed with exception: {str(e)}")
+                    summaries.append({
+                        "topic": "unknown",
+                        "summary": f"Task failed: {str(e)}",
+                        "chunks_processed": 0,
+                        "status": "error",
+                        "processing_time": 0
+                    })
+        
+        total_time = time.time() - start_time
+        print(f"🎉 Parallel processing completed in {total_time:.2f}s for {len(topic_docs)} topics")
+        
+        # Add timing metadata to the result
+        result = {"summaries": summaries}
+        result["parallel_processing"] = {
+            "total_time": total_time,
+            "topics_count": len(topic_docs),
+            "average_time_per_topic": total_time / len(topic_docs) if topic_docs else 0,
+            "method": "ThreadPoolExecutor"
+        }
+        
+        return result
+    
+    g.add_node("map_topics", _map_topics)
+    g.add_node("reduce_summaries", _reduce_summaries)
+    g.set_entry_point("map_topics")
+    g.add_edge("map_topics", "reduce_summaries")
+    g.set_finish_point("reduce_summaries")
+    return g.compile()
+
 SUMMARY_GRAPH = build_summary_graph()
+MULTI_TOPIC_SUMMARY_GRAPH = build_multi_topic_summary_graph()
 
 # -------------------- FastAPI ---------------------------------------
 app = FastAPI(title="LangGraph Doc Service", version="1.0")
@@ -331,7 +498,7 @@ async def delete_document(doc_id: str):
 async def multi_summary(
     doc_id: List[str] = Query(...),
     length: str = Query("medium", enum=["short", "medium", "long"]),
-    query: str = Query(None, description="Optional query/topic to focus the summary on specific aspects"),
+    query: str = Query(None, description="Optional query/topic(s) to focus the summary on. Use commas to separate multiple topics for parallel processing."),
     top_k: int = Query(10, description="Number of most relevant chunks to include when using query-focused summarization"),
 ):
     with db_session() as s:
@@ -340,19 +507,82 @@ async def multi_summary(
     if not_ready:
         raise HTTPException(409, f"Documents not ready: {not_ready}")
 
-    # If query is provided, use vector similarity search to get relevant chunks
+    # If query is provided, check if it contains multiple topics (comma-separated)
     if query and query.strip():
-        relevant_docs: List[Document] = []
-        for d in doc_id:
-            vs = load_vectorstore(d)
-            retrieved = vs.similarity_search(query.strip(), k=top_k)
-            relevant_docs.extend(retrieved)
+        topics = [topic.strip() for topic in query.split(",") if topic.strip()]
         
-        if not relevant_docs:
-            return {"summary": f"No relevant content found for the query: '{query}'", "documents": doc_id, "query": query}
+        # If multiple topics, use multi-topic graph
+        if len(topics) > 1:
+            multi_topic_input = {
+                "topics": topics,
+                "doc_ids": doc_id,
+                "top_k": top_k,
+                "length": length
+            }
+            
+            result_state = MULTI_TOPIC_SUMMARY_GRAPH.invoke(multi_topic_input)
+            summaries = result_state.get("summaries", [])
+            parallel_metadata = result_state.get("parallel_processing", {})
+            
+            if not summaries:
+                return {
+                    "type": "multi_topic",
+                    "summaries": [],
+                    "message": "No summaries could be generated for the provided topics.",
+                    "documents": doc_id,
+                    "topics": topics,
+                    "parallel_processing": parallel_metadata
+                }
+            
+            total_chunks = sum(s.get("chunks_processed", 0) for s in summaries)
+            successful_summaries = [s for s in summaries if s.get("status") == "success"]
+            
+            # Calculate performance metrics
+            individual_times = [s.get("processing_time", 0) for s in summaries if s.get("processing_time")]
+            max_individual_time = max(individual_times) if individual_times else 0
+            total_sequential_time = sum(individual_times) if individual_times else 0
+            parallel_speedup = total_sequential_time / parallel_metadata.get("total_time", 1) if parallel_metadata.get("total_time") else 1
+            
+            return {
+                "type": "multi_topic",
+                "summaries": summaries,
+                "documents": doc_id,
+                "topics": topics,
+                "total_chunks_processed": total_chunks,
+                "successful_topics": len(successful_summaries),
+                "total_topics": len(topics),
+                "search_method": "vector_similarity_multi_topic",
+                "parallel_processing": parallel_metadata,
+                "performance": {
+                    "parallel_time": parallel_metadata.get("total_time", 0),
+                    "estimated_sequential_time": total_sequential_time,
+                    "speedup_factor": round(parallel_speedup, 2),
+                    "longest_individual_task": max_individual_time,
+                    "efficiency": round((total_sequential_time / (parallel_metadata.get("total_time", 1) * len(topics))) * 100, 1) if parallel_metadata.get("total_time") and topics else 0,
+                    "parallel_method": parallel_metadata.get("method", "ThreadPoolExecutor"),
+                    "max_workers": min(len(topics), 5) if topics else 0
+                }
+            }
         
-        all_docs = relevant_docs
-        summary_context = f"focusing on aspects related to: {query}"
+        # Single topic - use existing logic
+        else:
+            single_topic = topics[0]
+            relevant_docs: List[Document] = []
+            for d in doc_id:
+                vs = load_vectorstore(d)
+                retrieved = vs.similarity_search(single_topic, k=top_k)
+                relevant_docs.extend(retrieved)
+            
+            if not relevant_docs:
+                return {
+                    "type": "single_topic",
+                    "summary": f"No relevant content found for the query: '{single_topic}'", 
+                    "documents": doc_id, 
+                    "query": single_topic
+                }
+            
+            all_docs = relevant_docs
+            summary_context = f"focusing on aspects related to: {single_topic}"
     else:
         # Original behavior: load all chunks
         all_docs: List[Document] = []
@@ -361,24 +591,34 @@ async def multi_summary(
         summary_context = "covering all content"
 
     if not all_docs:
-        return {"summary": "No content available for summarization.", "documents": doc_id, "query": query}
+        return {
+            "type": "single",
+            "summary": "No content available for summarization.", 
+            "documents": doc_id, 
+            "query": query
+        }
 
     # Prepare state for summary graph
     summary_input = {"docs": all_docs}
-    if query and query.strip():
+    if query and query.strip() and "," not in query:
         summary_input["query_context"] = query.strip()
     
     summary_state = SUMMARY_GRAPH.invoke(summary_input)
     summary = summary_state.get("summary", "Unable to generate summary.") if summary_state else "Unable to generate summary."
     
     if not summary or summary == "Unable to generate summary." or summary == "No content to summarize.":
-        return {"summary": "No content available for summarization.", "documents": doc_id, "query": query}
+        return {
+            "type": "single",
+            "summary": "No content available for summarization.", 
+            "documents": doc_id, 
+            "query": query
+        }
     
     summary = summary.strip()
     target = {"short": "≈3 sentences", "medium": "≈8 sentences", "long": "≈15 sentences"}[length]
     
     # Include query context in the refinement prompt if a query was provided
-    if query and query.strip():
+    if query and query.strip() and "," not in query:
         refinement_prompt = f"Rewrite this summary so it fits {target} while preserving key info, {summary_context}:\n\n{summary}"
     else:
         refinement_prompt = f"Rewrite this summary so it fits {target} while preserving key info:\n\n{summary}"
@@ -388,6 +628,7 @@ async def multi_summary(
     final_summary = refined.content.strip() if hasattr(refined, 'content') else str(refined).strip()
     
     result = {
+        "type": "single",
         "summary": final_summary, 
         "documents": doc_id,
         "chunks_processed": len(all_docs)

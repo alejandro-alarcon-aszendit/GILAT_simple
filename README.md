@@ -141,6 +141,8 @@ celery redis
 
 **Query-Focused Summarization:** When `query` parameter is provided, the system performs vector similarity search to find the most relevant content chunks across all specified documents, then summarizes only those relevant portions. This enables focused summaries on specific topics rather than general document summaries.
 
+**Multi-Topic Parallel Processing:** Use comma-separated topics (e.g., `query=machine learning,financial performance,project timeline`) to generate separate focused summaries for each topic processed in parallel using LangGraph's map-reduce pattern. Each topic gets its own vector similarity search and summary generation.
+
 ### 6.6 Semantic Q&A
 
 `GET /ask?q=<question>&doc_id=<id>&doc_id=<id>&top_k=3`

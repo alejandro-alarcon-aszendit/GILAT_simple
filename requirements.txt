@@ -17,6 +17,7 @@ docling
 
 # Vector database
 chromadb
+langchain-chroma
 
 # Text processing and utilities
 tiktoken

@@ -245,23 +245,33 @@ elif page == "📝 Summarize":
         if summary_mode == "🔍 Query-Focused Summary":
             st.subheader("🔍 Focus Query")
             query_text = st.text_area(
-                "What topic or aspect would you like the summary to focus on?",
-                placeholder="e.g., 'machine learning algorithms', 'financial performance', 'project timeline'...",
+                "What topic(s) would you like the summary to focus on?",
+                placeholder="Single topic: 'machine learning algorithms'\nMultiple topics: 'machine learning, financial performance, project timeline'",
                 height=80,
-                help="Enter a specific topic, question, or aspect you want the summary to focus on. The system will find the most relevant content using vector similarity search."
+                help="Enter topic(s) for focused summarization:\n• Single topic: Gets one summary focused on that topic\n• Multiple topics (comma-separated): Gets separate summaries for each topic processed in parallel"
             )
+            
+            # Parse topics to show preview
+            topics = []
+            if query_text.strip():
+                topics = [topic.strip() for topic in query_text.split(",") if topic.strip()]
+                if len(topics) > 1:
+                    st.info(f"🎯 **Multiple topics detected ({len(topics)}):** {', '.join(topics[:3])}{' ...' if len(topics) > 3 else ''}")
+                    st.caption("Each topic will get its own focused summary processed in parallel.")
+                else:
+                    st.info(f"📌 **Single focus topic:** {topics[0]}")
             
             col1, col2 = st.columns([2, 1])
             with col1:
-                if query_text:
-                    st.info(f"📌 **Focus topic:** {query_text}")
+                if len(topics) > 1:
+                    st.warning(f"⚡ Multi-topic mode: {len(topics)} summaries will be generated")
             with col2:
                 top_k = st.number_input(
-                    "Max relevant chunks:",
+                    "Max chunks per topic:",
                     min_value=5,
                     max_value=50,
                     value=10,
-                    help="Maximum number of relevant text chunks to include in the focused summary"
+                    help="Maximum number of relevant text chunks to include for each topic"
                 )
         
         # Summary options
@@ -296,20 +306,75 @@ elif page == "📝 Summarize":
             with st.spinner("Generating summary..."):
                 result = api_request("GET", "/summary", params=params)
                 
-                if result and 'summary' in result:
-                    st.subheader("📋 Summary")
-                    st.write(result['summary'])
-                    
-                    # Show metadata
-                    with st.expander("📊 Summary Details"):
-                        st.write(f"**Documents processed:** {len(result.get('documents', []))}")
-                        st.write(f"**Summary length:** {length}")
-                        st.write(f"**Chunks processed:** {result.get('chunks_processed', 'N/A')}")
-                        st.write(f"**Search method:** {result.get('search_method', 'N/A')}")
+                if result:
+                    # Handle multi-topic results
+                    if result.get('type') == 'multi_topic':
+                        summaries = result.get('summaries', [])
                         
-                        if result.get('query'):
-                            st.write(f"**Focus query:** {result.get('query')}")
-                            st.info("💡 This summary was generated using vector similarity search to find the most relevant content for your query.")
+                        st.subheader(f"📋 Multi-Topic Summaries ({len(summaries)} topics)")
+                        
+                        # Show overall stats
+                        successful = result.get('successful_topics', 0)
+                        total = result.get('total_topics', 0)
+                        if successful == total:
+                            st.success(f"✅ Successfully generated summaries for all {total} topics")
+                        else:
+                            st.warning(f"⚠️ Generated summaries for {successful} out of {total} topics")
+                        
+                        # Display each topic summary
+                        for i, summary_data in enumerate(summaries, 1):
+                            topic = summary_data.get('topic', f'Topic {i}')
+                            summary_text = summary_data.get('summary', '')
+                            status = summary_data.get('status', 'unknown')
+                            chunks = summary_data.get('chunks_processed', 0)
+                            
+                            with st.container():
+                                # Topic header with status indicator
+                                if status == 'success':
+                                    st.markdown(f"### 🎯 {topic}")
+                                elif status == 'no_content':
+                                    st.markdown(f"### ⚠️ {topic}")
+                                else:
+                                    st.markdown(f"### ❌ {topic}")
+                                
+                                # Summary content
+                                if status == 'success':
+                                    st.write(summary_text)
+                                    st.caption(f"📊 {chunks} chunks processed")
+                                elif status == 'no_content':
+                                    st.info(summary_text)
+                                else:
+                                    st.error(summary_text)
+                                
+                                st.divider()
+                        
+                        # Overall metadata
+                        with st.expander("📊 Overall Summary Details"):
+                            st.write(f"**Documents processed:** {len(result.get('documents', []))}")
+                            st.write(f"**Summary length:** {length}")
+                            st.write(f"**Total chunks processed:** {result.get('total_chunks_processed', 'N/A')}")
+                            st.write(f"**Search method:** {result.get('search_method', 'N/A')}")
+                            st.write(f"**Topics:** {', '.join(result.get('topics', []))}")
+                            st.info("💡 Each topic was processed in parallel using vector similarity search to find the most relevant content.")
+                    
+                    # Handle single summary results  
+                    elif 'summary' in result:
+                        st.subheader("📋 Summary")
+                        st.write(result['summary'])
+                        
+                        # Show metadata
+                        with st.expander("📊 Summary Details"):
+                            st.write(f"**Documents processed:** {len(result.get('documents', []))}")
+                            st.write(f"**Summary length:** {length}")
+                            st.write(f"**Chunks processed:** {result.get('chunks_processed', 'N/A')}")
+                            st.write(f"**Search method:** {result.get('search_method', 'N/A')}")
+                            
+                            if result.get('query'):
+                                st.write(f"**Focus query:** {result.get('query')}")
+                                st.info("💡 This summary was generated using vector similarity search to find the most relevant content for your query.")
+                    
+                    else:
+                        st.error("❌ Unexpected response format from the API.")
 
 # Ask Questions Page
 elif page == "❓ Ask Questions":
