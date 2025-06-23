@@ -104,4 +104,7 @@ class QAResponse(BaseModel):
     """Response schema for question answering."""
     answer: str
     snippets: List[dict]
-    documents: List[str] 
+    documents: List[str]
+    retrieval_stats: Optional[dict] = None
+    total_chunks_retrieved: Optional[int] = None
+    query: Optional[str] = None 

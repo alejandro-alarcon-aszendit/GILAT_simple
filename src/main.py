@@ -1,13 +1,16 @@
 """Main FastAPI application for the Document Service.
 
 Modular FastAPI application with clear structure and parallel workload visibility.
-Supports both file uploads and URL content fetching.
+Supports both file uploads and URL content fetching with authentication and CORS.
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from src.core.config import APIConfig
-from src.models.schemas import DocOut
+from src.core.auth import jwt_auth
+from src.models.schemas import DocOut, QAResponse
 from src.api.endpoints import DocumentEndpoints, SummaryEndpoints, QAEndpoints
+from src.api.auth_endpoints import AuthEndpoints, LoginRequest, LoginResponse
 
 
 def create_app() -> FastAPI:
@@ -19,33 +22,50 @@ def create_app() -> FastAPI:
         description=APIConfig.DESCRIPTION
     )
     
-    # Document management endpoints
-    app.get("/formats")(
+    # Add CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:8501", "http://localhost:3000", "*"],  # Add your frontend URLs
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["*"],
+    )
+    
+    # Authentication endpoints (public)
+    app.post("/auth/login", response_model=LoginResponse)(
+        AuthEndpoints.login
+    )
+    app.get("/auth/verify", dependencies=[Depends(jwt_auth)])(
+        AuthEndpoints.verify_token
+    )
+    
+    # Document management endpoints (with authentication)
+    app.get("/formats", dependencies=[Depends(jwt_auth)])(
         DocumentEndpoints.get_supported_formats
     )
-    app.post("/documents", status_code=201, response_model=dict)(
+    app.post("/documents", status_code=201, response_model=dict, dependencies=[Depends(jwt_auth)])(
         DocumentEndpoints.upload_document
     )
-    app.post("/documents/url", status_code=201, response_model=dict)(
+    app.post("/documents/url", status_code=201, response_model=dict, dependencies=[Depends(jwt_auth)])(
         DocumentEndpoints.ingest_url
     )
-    app.get("/documents", response_model=list[DocOut])(
+    app.get("/documents", response_model=list[DocOut], dependencies=[Depends(jwt_auth)])(
         DocumentEndpoints.list_documents
     )
-    app.get("/documents/{doc_id}", response_model=DocOut)(
+    app.get("/documents/{doc_id}", response_model=DocOut, dependencies=[Depends(jwt_auth)])(
         DocumentEndpoints.get_document
     )
-    app.delete("/documents/{doc_id}")(
+    app.delete("/documents/{doc_id}", dependencies=[Depends(jwt_auth)])(
         DocumentEndpoints.delete_document
     )
     
-    # Summarization endpoints
-    app.get("/summary")(
+    # Summarization endpoints (with authentication)
+    app.get("/summary", dependencies=[Depends(jwt_auth)])(
         SummaryEndpoints.multi_summary
     )
     
-    # Question answering endpoints
-    app.get("/ask")(
+    # Question answering endpoints (with authentication)
+    app.get("/ask", response_model=QAResponse, dependencies=[Depends(jwt_auth)])(
         QAEndpoints.ask_docs
     )
     

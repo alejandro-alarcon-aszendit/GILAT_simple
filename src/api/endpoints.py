@@ -414,23 +414,70 @@ class QAEndpoints:
         # Retrieve relevant passages
         from langchain.docstore.document import Document
         retrieved: List[Document] = []
+        retrieval_stats = {}
+        
         for d in doc_id:
-            vs = DocumentService.load_vector_store(d)
-            retrieved.extend(vs.similarity_search(q, k=top_k))
+            try:
+                vs = DocumentService.load_vector_store(d)
+                doc_results = vs.similarity_search(q, k=top_k)
+                retrieved.extend(doc_results)
+                retrieval_stats[d] = len(doc_results)
+                print(f"📄 Retrieved {len(doc_results)} chunks from document {d}")
+            except Exception as e:
+                print(f"❌ Error retrieving from document {d}: {str(e)}")
+                retrieval_stats[d] = 0
 
         if not retrieved:
-            return {"answer": "No relevant passages found.", "snippets": []}
+            return {
+                "answer": "No relevant passages found for your question. Try rephrasing your query or check if the documents contain information related to your topic.",
+                "snippets": [],
+                "retrieval_stats": retrieval_stats,
+                "total_chunks_retrieved": 0
+            }
 
-        # Generate answer
-        answer = llm.invoke(
-            "Answer the user's question based only on the excerpts below. "
-            "If the answer is not contained, say so.\n\n" +
-            "\n---\n".join(doc.page_content for doc in retrieved) + f"\n\nQuestion: {q}"
-        )
+        # Generate answer with improved prompt
+        context_text = "\n---\n".join(doc.page_content for doc in retrieved)
+        
+        prompt = f"""You are a helpful assistant answering questions based on the provided document excerpts. 
+
+INSTRUCTIONS:
+1. Answer the user's question using ONLY the information provided in the excerpts below
+2. If the exact information isn't available, explain what related information IS available
+3. Be specific about what the documents contain vs. what they don't contain  
+4. If you can provide partial information or context, do so while being clear about limitations
+5. If no relevant information is found, say so clearly but helpfully
+
+DOCUMENT EXCERPTS:
+{context_text}
+
+QUESTION: {q}
+
+ANSWER:"""
+
+        try:
+            answer = llm.invoke(prompt)
+            answer_text = answer.content.strip() if hasattr(answer, 'content') else str(answer).strip()
+            
+            # Ensure we have a meaningful answer
+            if not answer_text or len(answer_text) < 10:
+                answer_text = f"I found {len(retrieved)} relevant passages in the documents, but I cannot provide a specific answer to your question. Please review the snippets below to see what information is available."
+                
+        except Exception as e:
+            print(f"❌ Error generating answer: {str(e)}")
+            answer_text = f"I apologize, but I encountered an error while generating an answer. The retrieved documents contain information that may be relevant to your question. Please check the snippets below for details."
         
         snippets = [{"content": d.page_content} for d in retrieved]
+        
+        # Debug information
+        print(f"🔍 Question: {q}")
+        print(f"📄 Retrieved {len(retrieved)} total chunks")
+        print(f"📊 Retrieval stats: {retrieval_stats}")
+        
         return JSONResponse({
-            "answer": answer.content.strip(), 
+            "answer": answer_text, 
             "snippets": snippets, 
-            "documents": doc_id
+            "documents": doc_id,
+            "retrieval_stats": retrieval_stats,
+            "total_chunks_retrieved": len(retrieved),
+            "query": q
         }) 

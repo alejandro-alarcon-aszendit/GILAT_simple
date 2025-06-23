@@ -1,0 +1,38 @@
+services:
+  # FastAPI Backend Service
+  api:
+    build: .
+    container_name: gilat_api
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - API_AUTH_KEY=${API_AUTH_KEY:-}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+    volumes:
+      - ./vector_db:/app/vector_db
+      - ./app.db:/app/app.db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  # Streamlit Frontend Service
+  frontend:
+    build: .
+    container_name: gilat_frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - API_BASE_URL=http://api:8000
+    volumes:
+      - ./vector_db:/app/vector_db
+      - ./app.db:/app/app.db
+    depends_on:
+      - api
+    restart: unless-stopped
+    command: ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"] 

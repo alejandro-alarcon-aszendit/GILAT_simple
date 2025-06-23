@@ -9,12 +9,13 @@ Provides functionality for document management, summarization, and Q&A.
 import streamlit as st
 import requests
 import json
+import os
 from typing import List, Dict, Any
 from datetime import datetime
 import time
 
 # Configuration
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 # Page configuration
 st.set_page_config(
@@ -56,17 +57,92 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Helper functions
+def get_auth_headers() -> Dict[str, str]:
+    """Get authentication headers for API requests."""
+    headers = {}
+    if st.session_state.get("jwt_token"):
+        headers["Authorization"] = f"Bearer {st.session_state.jwt_token}"
+    return headers
+
+def login_with_api_key(api_key: str) -> bool:
+    """Login with API key and get JWT token.
+    
+    Args:
+        api_key: API key to authenticate with
+        
+    Returns:
+        True if login successful, False otherwise
+    """
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/auth/login",
+            json={"api_key": api_key},
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            st.session_state.jwt_token = data["access_token"]
+            st.session_state.authenticated = True
+            # Calculate expiry time (24 hours from now)
+            from datetime import datetime, timedelta
+            st.session_state.token_expires = datetime.now() + timedelta(seconds=data.get("expires_in", 86400))
+            return True
+        else:
+            st.session_state.jwt_token = ""
+            st.session_state.authenticated = False
+            st.session_state.token_expires = None
+            return False
+    except Exception as e:
+        st.error(f"Login failed: {str(e)}")
+        return False
+
+def verify_current_token() -> bool:
+    """Verify if current JWT token is still valid.
+    
+    Returns:
+        True if token is valid, False otherwise
+    """
+    if not st.session_state.jwt_token:
+        return False
+        
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/auth/verify",
+            headers=get_auth_headers()
+        )
+        return response.status_code == 200
+    except:
+        return False
+
+def logout():
+    """Clear authentication state."""
+    st.session_state.jwt_token = ""
+    st.session_state.authenticated = False
+    st.session_state.token_expires = None
+
 def api_request(method: str, endpoint: str, **kwargs) -> Dict[Any, Any]:
-    """Make API request with error handling"""
+    """Make API request with error handling and authentication"""
     url = f"{API_BASE_URL}{endpoint}"
+    
+    # Add authentication headers
+    headers = kwargs.get("headers", {})
+    headers.update(get_auth_headers())
+    kwargs["headers"] = headers
+    
     try:
         response = requests.request(method, url, **kwargs)
-        if response.status_code >= 400:
+        if response.status_code == 401:
+            st.error("🔒 Authentication failed. Please login again.")
+            # Clear invalid token
+            logout()
+            return {}
+        elif response.status_code >= 400:
             st.error(f"API Error {response.status_code}: {response.text}")
             return {}
         return response.json() if response.content else {}
     except requests.exceptions.ConnectionError:
-        st.error("❌ Cannot connect to API. Make sure the FastAPI server is running on http://localhost:8000")
+        st.error(f"❌ Cannot connect to API at {API_BASE_URL}. Make sure the FastAPI server is running.")
         return {}
     except Exception as e:
         st.error(f"❌ Request failed: {str(e)}")
@@ -87,20 +163,114 @@ def format_datetime(dt_str: str) -> str:
 # Initialize session state
 if "context_docs" not in st.session_state:
     st.session_state.context_docs = []
+if "api_key" not in st.session_state:
+    st.session_state.api_key = ""
+if "jwt_token" not in st.session_state:
+    st.session_state.jwt_token = ""
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "token_expires" not in st.session_state:
+    st.session_state.token_expires = None
 
 # Main header
 st.markdown('<h1 class="main-header">📚 Document Service</h1>', unsafe_allow_html=True)
 
 # Sidebar for navigation
 st.sidebar.title("Navigation")
+
+# Authentication Section
+st.sidebar.subheader("🔐 Authentication")
+
+# Check if token is expired
+token_expired = False
+if st.session_state.token_expires:
+    from datetime import datetime
+    if datetime.now() > st.session_state.token_expires:
+        token_expired = True
+        logout()
+
+if not st.session_state.authenticated or token_expired:
+    # Login form
+    st.sidebar.write("**Login Required**")
+    api_key_input = st.sidebar.text_input(
+        "API Key:", 
+        type="password", 
+        value=st.session_state.api_key,
+        placeholder="Enter your API key (optional)"
+    )
+    
+    # Update stored API key
+    if api_key_input != st.session_state.api_key:
+        st.session_state.api_key = api_key_input
+    
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("🔑 Login", key="login_btn"):
+            if login_with_api_key(st.session_state.api_key):
+                st.sidebar.success("✅ Login successful!")
+                st.rerun()
+            else:
+                st.sidebar.error("❌ Login failed!")
+    
+    with col2:
+        if st.button("🔓 No Auth", key="no_auth_btn"):
+            # Try to login without API key (for no-auth mode)
+            if login_with_api_key(""):
+                st.sidebar.info("ℹ️ No auth required")
+                st.rerun()
+            else:
+                st.sidebar.error("❌ Authentication required")
+    
+    st.sidebar.info("💡 If no authentication is required, click 'No Auth'")
+
+else:
+    # Authenticated state
+    st.sidebar.success("🔒 **Authenticated**")
+    
+    # Show token info
+    if st.session_state.token_expires:
+        time_left = st.session_state.token_expires - datetime.now()
+        hours_left = int(time_left.total_seconds() / 3600)
+        st.sidebar.caption(f"Token expires in: {hours_left}h")
+    
+    # Logout and verify buttons
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("🚪 Logout", key="logout_btn"):
+            logout()
+            st.rerun()
+    
+    with col2:
+        if st.button("✅ Verify", key="verify_btn"):
+            if verify_current_token():
+                st.sidebar.success("Token valid!")
+            else:
+                st.sidebar.error("Token invalid!")
+                logout()
+                st.rerun()
+
+st.sidebar.divider()
+
 page = st.sidebar.selectbox(
     "Choose a page:",
     ["📋 Document Management", "📝 Summarize", "❓ Ask Questions", "🔧 API Status"]
 )
 
+# Check authentication for protected pages
+def require_auth():
+    """Check if authentication is required and valid for protected operations."""
+    if not st.session_state.authenticated:
+        st.warning("🔒 Please login in the sidebar before accessing this feature.")
+        st.info("💡 **Tip**: If no API key is required, click 'No Auth' to proceed.")
+        return False
+    return True
+
 # Document Management Page
 if page == "📋 Document Management":
     st.header("📋 Document Management")
+    
+    if not require_auth():
+        st.stop()
     
     # Document input section with tabs
     st.subheader("📤 Add New Document")
@@ -271,6 +441,9 @@ if page == "📋 Document Management":
 # Summarize Page
 elif page == "📝 Summarize":
     st.header("📝 Document Summarization")
+    
+    if not require_auth():
+        st.stop()
     
     if not st.session_state.context_docs:
         st.warning("⚠️ No documents in context. Go to Document Management to add documents.")
@@ -478,6 +651,9 @@ elif page == "📝 Summarize":
 # Ask Questions Page
 elif page == "❓ Ask Questions":
     st.header("❓ Ask Questions")
+    
+    if not require_auth():
+        st.stop()
     
     if not st.session_state.context_docs:
         st.warning("⚠️ No documents in context. Go to Document Management to add documents.")

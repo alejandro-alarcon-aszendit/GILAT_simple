@@ -27,6 +27,8 @@ numpy
 # Additional dependencies for document handling
 pydantic
 python-dotenv
+PyJWT
+python-multipart
 
 # UI and API client
 streamlit
@@ -36,4 +38,4 @@ requests
 firecrawl-py  # Professional web scraping service
 beautifulsoup4  # HTML parsing
 lxml  # XML/HTML parser
-aiohttp  # Async HTTP client 
+aiohttp  # Async HTTP client
