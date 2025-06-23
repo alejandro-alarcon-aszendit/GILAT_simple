@@ -24,4 +24,8 @@ numpy
 
 # Additional dependencies for document handling
 pydantic
-python-dotenv 
+python-dotenv
+
+# UI and API client
+streamlit
+requests 

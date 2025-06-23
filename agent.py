@@ -52,6 +52,9 @@ from langgraph.graph import Graph
 from pydantic import BaseModel
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
+# Document processing
+from docling.document_converter import DocumentConverter
+
 # -------------------- Config ----------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
 BASE_DIR = Path("vector_db")
@@ -84,10 +87,55 @@ def build_ingest_graph():
     g = Graph()
 
     def _parse(file_path: str):
-        # Simple text reading for markdown/text files
-        with open(file_path, 'r', encoding='utf-8') as f:
-            text = f.read()
-        return {"text": text}
+        """Parse document content based on file type"""
+        file_path = Path(file_path)
+        file_extension = file_path.suffix.lower()
+        
+        try:
+            if file_extension in ['.txt']:
+                # Simple text reading for plain text files
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+            elif file_extension in ['.pdf', '.md', '.docx', '.pptx', '.html']:
+                # Use docling for supported document formats
+                converter = DocumentConverter()
+                result = converter.convert(file_path)
+                
+                # Check if conversion was successful
+                if result is None or result.document is None:
+                    raise ValueError("Document conversion returned None")
+                
+                # Try to extract text content
+                try:
+                    text = result.document.export_to_text()
+                except:
+                    # Fallback to markdown export
+                    try:
+                        text = result.document.export_to_markdown()
+                    except:
+                        raise ValueError("Failed to extract text from document")
+                
+                # Ensure we got some text
+                if not text or not text.strip():
+                    raise ValueError("No text content extracted from document")
+                    
+            else:
+                # Try to read as text for other file types
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        text = f.read()
+                except UnicodeDecodeError:
+                    # If UTF-8 fails, try with error handling
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        text = f.read()
+            
+            # Final check to ensure we have content
+            if not text or not text.strip():
+                raise ValueError("No text content found in document")
+            
+            return {"text": text}
+        except Exception as e:
+            raise ValueError(f"Failed to parse document '{file_path.name}': {str(e)}")
 
     def _split(state):
         docs = [Document(page_content=c) for c in SPLITTER.split_text(state["text"])]
@@ -97,6 +145,7 @@ def build_ingest_graph():
     g.add_node("split", _split)
     g.set_entry_point("parse")
     g.add_edge("parse", "split")
+    g.set_finish_point("split")
     return g.compile()
 
 INGEST_GRAPH = build_ingest_graph()
