@@ -51,8 +51,11 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langgraph.graph import Graph
-from pydantic import BaseModel
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.prompts import PromptTemplate
+from pydantic import BaseModel, Field as PydanticField
 from sqlmodel import Field, Session, SQLModel, create_engine, select
+from typing import Optional, Literal
 
 # Document processing
 from docling.document_converter import DocumentConverter
@@ -64,8 +67,50 @@ BASE_DIR.mkdir(exist_ok=True)
 CHUNK_FILE = "chunks.json"
 
 LLM = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.2)
+REFLECTION_LLM = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.1)  # Lower temp for more consistent evaluation
+IMPROVEMENT_LLM = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.3)  # Slightly higher temp for creative improvements
 EMBEDDER = OpenAIEmbeddings(model="text-embedding-ada-002")
 SPLITTER = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+
+# -------------------- Structured Output Models for Reflection -----
+class SummaryEvaluation(BaseModel):
+    """Structured evaluation of a summary's quality and accuracy."""
+    factual_accuracy: Literal["excellent", "good", "fair", "poor"] = PydanticField(
+        description="Assessment of factual accuracy based on source content"
+    )
+    length_compliance: Literal["perfect", "slightly_over", "slightly_under", "significantly_off"] = PydanticField(
+        description="How well the summary meets the specified length requirement"
+    )
+    topic_relevance: Literal["highly_relevant", "mostly_relevant", "somewhat_relevant", "off_topic"] = PydanticField(
+        description="How well the summary addresses the specified topic"
+    )
+    clarity_readability: Literal["excellent", "good", "fair", "poor"] = PydanticField(
+        description="Overall clarity and readability of the summary"
+    )
+    improvement_needed: bool = PydanticField(
+        description="Whether the summary needs improvement"
+    )
+    specific_issues: List[str] = PydanticField(
+        description="List of specific issues found (empty if none)",
+        default=[]
+    )
+    confidence_score: float = PydanticField(
+        description="Confidence in the evaluation (0.0 to 1.0)",
+        ge=0.0,
+        le=1.0
+    )
+
+class ImprovedSummary(BaseModel):
+    """Improved version of a summary with reflection metadata."""
+    improved_text: str = PydanticField(
+        description="The improved version of the summary"
+    )
+    changes_made: List[str] = PydanticField(
+        description="List of specific changes made during improvement"
+    )
+    final_evaluation: SummaryEvaluation = PydanticField(
+        description="Final evaluation of the improved summary"
+    )
 
 # -------------------- DB models -------------------------------------
 class Doc(SQLModel, table=True):
@@ -421,8 +466,361 @@ def build_multi_topic_summary_graph():
     g.set_finish_point("reduce_summaries")
     return g.compile()
 
+# -------------------- Reflection System -----------------------------
+
+def build_reflection_graph():
+    """LangGraph for evaluating and improving summaries with structured output"""
+    g = Graph()
+    
+    def _evaluate_summary(state):
+        """Evaluate a summary for quality, accuracy, and compliance"""
+        summary_text = state.get("summary", "")
+        topic = state.get("topic", "")
+        length_requirement = state.get("length", "medium")
+        source_content = state.get("source_content", "")
+        
+        if not summary_text:
+            return {"evaluation": None, "error": "No summary provided"}
+        
+        print(f"🔍 Evaluating summary for topic: '{topic}'...")
+        
+        # Create structured output parser
+        evaluation_parser = PydanticOutputParser(pydantic_object=SummaryEvaluation)
+        
+        # Create evaluation prompt
+        evaluation_prompt = PromptTemplate(
+            template="""You are an expert content reviewer. Evaluate the following summary based on the specified criteria.
+
+**Topic**: {topic}
+**Length Requirement**: {length_requirement} (short ≈ 3 sentences, medium ≈ 8 sentences, long ≈ 15 sentences)
+
+**Summary to Evaluate**:
+{summary_text}
+
+**Source Content** (for factual verification):
+{source_content}
+
+Evaluate the summary on these dimensions:
+1. **Factual Accuracy**: How well does the summary reflect the source content?
+2. **Length Compliance**: How well does it meet the length requirement?
+3. **Topic Relevance**: How well does it address the specified topic?
+4. **Clarity & Readability**: Is it clear and well-written?
+
+Be thorough in your evaluation and specific about any issues found.
+
+{format_instructions}""",
+            input_variables=["topic", "length_requirement", "summary_text", "source_content"],
+            partial_variables={"format_instructions": evaluation_parser.get_format_instructions()}
+        )
+        
+        try:
+            # Get structured evaluation
+            chain = evaluation_prompt | REFLECTION_LLM | evaluation_parser
+            evaluation = chain.invoke({
+                "topic": topic or "general content",
+                "length_requirement": length_requirement,
+                "summary_text": summary_text,
+                "source_content": source_content[:2000] if source_content else "No source content provided"
+            })
+            
+            print(f"  📊 Evaluation complete - Improvement needed: {evaluation.improvement_needed}")
+            print(f"      Factual accuracy: {evaluation.factual_accuracy}")
+            print(f"      Length compliance: {evaluation.length_compliance}")
+            print(f"      Topic relevance: {evaluation.topic_relevance}")
+            
+            return {"evaluation": evaluation}
+            
+        except Exception as e:
+            print(f"  ❌ Evaluation failed: {str(e)}")
+            return {"evaluation": None, "error": f"Evaluation failed: {str(e)}"}
+    
+    def _improve_summary(state):
+        """Improve a summary based on the evaluation feedback"""
+        summary_text = state.get("summary", "")
+        evaluation = state.get("evaluation")
+        topic = state.get("topic", "")
+        length_requirement = state.get("length", "medium")
+        source_content = state.get("source_content", "")
+        
+        if not evaluation or not evaluation.improvement_needed:
+            print(f"  ✅ No improvement needed for topic: '{topic}'")
+            return {
+                "improved_summary": {
+                    "improved_text": summary_text,
+                    "changes_made": ["No changes needed - summary meets quality standards"],
+                    "final_evaluation": evaluation
+                }
+            }
+        
+        print(f"🔧 Improving summary for topic: '{topic}'...")
+        print(f"    Issues found: {', '.join(evaluation.specific_issues)}")
+        
+        # Create structured output parser for improvement
+        improvement_parser = PydanticOutputParser(pydantic_object=ImprovedSummary)
+        
+        # Create improvement prompt
+        improvement_prompt = PromptTemplate(
+            template="""You are an expert content editor. Improve the following summary based on the evaluation feedback.
+
+**FOCUS**: Improve this summary about "{topic}" ONLY. Do not try to connect it to other unrelated topics that may appear in the source content.
+
+**Topic**: {topic}
+**Length Requirement**: {length_requirement} (short ≈ 3 sentences, medium ≈ 8 sentences, long ≈ 15 sentences)
+
+**Original Summary**:
+{summary_text}
+
+**Evaluation Feedback**:
+- Factual Accuracy: {factual_accuracy}
+- Length Compliance: {length_compliance}
+- Topic Relevance: {topic_relevance}
+- Clarity & Readability: {clarity_readability}
+- Specific Issues: {specific_issues}
+
+**Source Content** (for reference - only use content relevant to "{topic}"):
+{source_content}
+
+Please provide an improved version that addresses all the identified issues. Your improved summary should:
+1. Be factually accurate to the source content that relates to "{topic}"
+2. Meet the specified length requirement
+3. Stay focused ONLY on the topic "{topic}" - do not mention unrelated topics
+4. Be clear and well-written
+
+IMPORTANT: Keep the summary focused solely on "{topic}". Do not suggest connections to other topics.
+
+{format_instructions}""",
+            input_variables=["topic", "length_requirement", "summary_text", "factual_accuracy", 
+                           "length_compliance", "topic_relevance", "clarity_readability", 
+                           "specific_issues", "source_content"],
+            partial_variables={"format_instructions": improvement_parser.get_format_instructions()}
+        )
+        
+        try:
+            # Get improved summary
+            chain = improvement_prompt | IMPROVEMENT_LLM | improvement_parser
+            improved = chain.invoke({
+                "topic": topic or "general content",
+                "length_requirement": length_requirement,
+                "summary_text": summary_text,
+                "factual_accuracy": evaluation.factual_accuracy,
+                "length_compliance": evaluation.length_compliance,
+                "topic_relevance": evaluation.topic_relevance,
+                "clarity_readability": evaluation.clarity_readability,
+                "specific_issues": ", ".join(evaluation.specific_issues) if evaluation.specific_issues else "None",
+                "source_content": source_content[:2000] if source_content else "No source content provided"
+            })
+            
+            print(f"  ✨ Improvement complete - Changes: {len(improved.changes_made)}")
+            print(f"      Final quality: {improved.final_evaluation.factual_accuracy} factual accuracy")
+            
+            return {"improved_summary": improved}
+            
+        except Exception as e:
+            print(f"  ❌ Improvement failed: {str(e)}")
+            return {"improved_summary": None, "error": f"Improvement failed: {str(e)}"}
+    
+    g.add_node("evaluate", _evaluate_summary)
+    g.add_node("improve", _improve_summary)
+    g.set_entry_point("evaluate")
+    g.add_edge("evaluate", "improve")
+    g.set_finish_point("improve")
+    return g.compile()
+
 SUMMARY_GRAPH = build_summary_graph()
 MULTI_TOPIC_SUMMARY_GRAPH = build_multi_topic_summary_graph()
+REFLECTION_GRAPH = build_reflection_graph()
+
+# -------------------- Enhanced Multi-Topic Summary with Reflection ---
+
+def build_multi_topic_summary_with_reflection_graph():
+    """Enhanced multi-topic graph that includes reflection and improvement"""
+    g = Graph()
+    
+    def _map_topics_enhanced(state):
+        """Enhanced map step that preserves source content for reflection"""
+        topics = state.get("topics", [])
+        doc_ids = state.get("doc_ids", [])
+        top_k = state.get("top_k", 10)
+        
+        if not topics or not doc_ids:
+            return {"topic_docs": []}
+        
+        topic_docs = []
+        for topic in topics:
+            topic_relevant_docs = []
+            doc_sources = []  # Track which docs contributed content
+            
+            for doc_id in doc_ids:
+                try:
+                    vs = load_vectorstore(doc_id)
+                    retrieved = vs.similarity_search(topic.strip(), k=top_k)
+                    if retrieved:  # Only include if we found relevant content
+                        topic_relevant_docs.extend(retrieved)
+                        doc_sources.append(doc_id)
+                        print(f"    📄 Topic '{topic}' found {len(retrieved)} chunks in document {doc_id}")
+                except Exception as e:
+                    print(f"Error retrieving docs for topic '{topic}' from doc {doc_id}: {e}")
+                    continue
+            
+            # Preserve source content for reflection, but limit to avoid overwhelming the reflection
+            # Take only the most relevant chunks (already sorted by similarity)
+            limited_docs = topic_relevant_docs[:min(20, len(topic_relevant_docs))]
+            source_content = "\n\n".join([doc.page_content for doc in limited_docs])
+            
+            # Truncate source content if too long to avoid token limits
+            if len(source_content) > 4000:
+                source_content = source_content[:4000] + "\n\n[Content truncated for reflection...]"
+            
+            topic_docs.append({
+                "topic": topic.strip(),
+                "docs": topic_relevant_docs,
+                "doc_count": len(topic_relevant_docs),
+                "source_content": source_content,
+                "contributing_docs": doc_sources,
+                "limited_chunks_for_reflection": len(limited_docs)
+            })
+            
+            print(f"  📋 Topic '{topic}' mapped to {len(topic_relevant_docs)} total chunks from {len(doc_sources)} documents")
+        
+        return {"topic_docs": topic_docs}
+    
+    def _reduce_and_reflect(state):
+        """Generate summaries and apply reflection in parallel"""
+        import concurrent.futures
+        
+        topic_docs = state.get("topic_docs", [])
+        length = state.get("length", "medium")
+        enable_reflection = state.get("enable_reflection", True)
+        
+        if not topic_docs:
+            return {"summaries": []}
+        
+        print(f"🚀 Starting parallel processing with reflection for {len(topic_docs)} topics...")
+        start_time = time.time()
+        
+        def process_with_reflection(topic_data):
+            """Process a topic with summary generation and reflection"""
+            topic = topic_data["topic"]
+            docs = topic_data["docs"]
+            source_content = topic_data.get("source_content", "")
+            topic_start = time.time()
+            
+            print(f"  📝 Processing with reflection: '{topic}' with {len(docs)} docs...")
+            
+            if not docs:
+                return {
+                    "topic": topic,
+                    "summary": f"No relevant content found for topic: '{topic}'",
+                    "chunks_processed": 0,
+                    "status": "no_content",
+                    "processing_time": time.time() - topic_start,
+                    "reflection_applied": False
+                }
+            
+            try:
+                # Step 1: Generate initial summary
+                chain = load_summarize_chain(LLM, chain_type="map_reduce")
+                result = chain.invoke({"input_documents": docs})
+                
+                if isinstance(result, dict) and "output_text" in result:
+                    initial_summary = result["output_text"]
+                elif isinstance(result, str):
+                    initial_summary = result
+                else:
+                    initial_summary = str(result) if result else "Unable to generate summary."
+                
+                # Step 2: Apply reflection if enabled and we have a valid summary
+                if enable_reflection and initial_summary and initial_summary != "Unable to generate summary.":
+                    print(f"    🔍 Applying reflection to '{topic}'...")
+                    
+                    reflection_input = {
+                        "summary": initial_summary,
+                        "topic": topic,
+                        "length": length,
+                        "source_content": source_content
+                    }
+                    
+                    reflection_result = REFLECTION_GRAPH.invoke(reflection_input)
+                    improved_summary = reflection_result.get("improved_summary")
+                    
+                    if improved_summary and improved_summary.improved_text:
+                        final_summary = improved_summary.improved_text
+                        reflection_metadata = {
+                            "reflection_applied": True,
+                            "changes_made": improved_summary.changes_made,
+                            "initial_evaluation": reflection_result.get("evaluation").__dict__ if reflection_result.get("evaluation") else None,
+                            "final_evaluation": improved_summary.final_evaluation.__dict__
+                        }
+                        print(f"    ✨ Reflection complete for '{topic}' - Improved: {len(improved_summary.changes_made) > 1}")
+                    else:
+                        final_summary = initial_summary
+                        reflection_metadata = {
+                            "reflection_applied": False,
+                            "error": reflection_result.get("error", "Unknown reflection error")
+                        }
+                        print(f"    ⚠️ Reflection failed for '{topic}', using original summary")
+                else:
+                    final_summary = initial_summary
+                    reflection_metadata = {"reflection_applied": False, "reason": "Reflection disabled or invalid summary"}
+                
+                total_time = time.time() - topic_start
+                print(f"  ✅ Completed '{topic}' with reflection in {total_time:.2f}s")
+                
+                return {
+                    "topic": topic,
+                    "summary": final_summary,
+                    "chunks_processed": len(docs),
+                    "status": "success",
+                    "processing_time": total_time,
+                    **reflection_metadata
+                }
+                
+            except Exception as e:
+                total_time = time.time() - topic_start
+                print(f"  ❌ Failed '{topic}' in {total_time:.2f}s - {str(e)}")
+                return {
+                    "topic": topic,
+                    "summary": f"Error generating summary for '{topic}': {str(e)}",
+                    "chunks_processed": len(docs),
+                    "status": "error",
+                    "processing_time": total_time,
+                    "reflection_applied": False
+                }
+        
+        # Process all topics in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(topic_docs), 3)) as executor:
+            futures = [executor.submit(process_with_reflection, topic_data) for topic_data in topic_docs]
+            summaries = [future.result() for future in concurrent.futures.as_completed(futures)]
+        
+        total_time = time.time() - start_time
+        print(f"🎉 Parallel processing with reflection completed in {total_time:.2f}s")
+        
+        # Calculate reflection statistics
+        reflection_applied_count = sum(1 for s in summaries if s.get("reflection_applied", False))
+        
+        result = {"summaries": summaries}
+        result["parallel_processing"] = {
+            "total_time": total_time,
+            "topics_count": len(topic_docs),
+            "average_time_per_topic": total_time / len(topic_docs) if topic_docs else 0,
+            "method": "ThreadPoolExecutor_with_Reflection",
+            "reflection_statistics": {
+                "total_topics": len(summaries),
+                "reflection_applied": reflection_applied_count,
+                "reflection_skipped": len(summaries) - reflection_applied_count
+            }
+        }
+        
+        return result
+    
+    g.add_node("map_topics_enhanced", _map_topics_enhanced)
+    g.add_node("reduce_and_reflect", _reduce_and_reflect)
+    g.set_entry_point("map_topics_enhanced")
+    g.add_edge("map_topics_enhanced", "reduce_and_reflect")
+    g.set_finish_point("reduce_and_reflect")
+    return g.compile()
+
+MULTI_TOPIC_SUMMARY_WITH_REFLECTION_GRAPH = build_multi_topic_summary_with_reflection_graph()
 
 # -------------------- FastAPI ---------------------------------------
 app = FastAPI(title="LangGraph Doc Service", version="1.0")
@@ -500,6 +898,7 @@ async def multi_summary(
     length: str = Query("medium", enum=["short", "medium", "long"]),
     query: str = Query(None, description="Optional query/topic(s) to focus the summary on. Use commas to separate multiple topics for parallel processing."),
     top_k: int = Query(10, description="Number of most relevant chunks to include when using query-focused summarization"),
+    enable_reflection: bool = Query(True, description="Enable AI reflection to review and improve summary quality, accuracy, and length compliance"),
 ):
     with db_session() as s:
         docs_meta = s.exec(select(Doc).where(Doc.id.in_(doc_id))).all()
@@ -511,16 +910,21 @@ async def multi_summary(
     if query and query.strip():
         topics = [topic.strip() for topic in query.split(",") if topic.strip()]
         
-        # If multiple topics, use multi-topic graph
+        # If multiple topics, use multi-topic graph (with or without reflection)
         if len(topics) > 1:
             multi_topic_input = {
                 "topics": topics,
                 "doc_ids": doc_id,
                 "top_k": top_k,
-                "length": length
+                "length": length,
+                "enable_reflection": enable_reflection
             }
             
-            result_state = MULTI_TOPIC_SUMMARY_GRAPH.invoke(multi_topic_input)
+            # Choose graph based on reflection setting
+            if enable_reflection:
+                result_state = MULTI_TOPIC_SUMMARY_WITH_REFLECTION_GRAPH.invoke(multi_topic_input)
+            else:
+                result_state = MULTI_TOPIC_SUMMARY_GRAPH.invoke(multi_topic_input)
             summaries = result_state.get("summaries", [])
             parallel_metadata = result_state.get("parallel_processing", {})
             
@@ -543,7 +947,11 @@ async def multi_summary(
             total_sequential_time = sum(individual_times) if individual_times else 0
             parallel_speedup = total_sequential_time / parallel_metadata.get("total_time", 1) if parallel_metadata.get("total_time") else 1
             
-            return {
+            # Calculate reflection statistics if available
+            reflection_stats = parallel_metadata.get("reflection_statistics", {})
+            reflection_applied_count = sum(1 for s in summaries if s.get("reflection_applied", False))
+            
+            response = {
                 "type": "multi_topic",
                 "summaries": summaries,
                 "documents": doc_id,
@@ -561,8 +969,21 @@ async def multi_summary(
                     "efficiency": round((total_sequential_time / (parallel_metadata.get("total_time", 1) * len(topics))) * 100, 1) if parallel_metadata.get("total_time") and topics else 0,
                     "parallel_method": parallel_metadata.get("method", "ThreadPoolExecutor"),
                     "max_workers": min(len(topics), 5) if topics else 0
-                }
+                },
+                "reflection_enabled": enable_reflection
             }
+            
+            # Add reflection statistics if reflection was used
+            if enable_reflection and reflection_stats:
+                response["reflection_statistics"] = reflection_stats
+            elif enable_reflection:
+                response["reflection_statistics"] = {
+                    "total_topics": len(summaries),
+                    "reflection_applied": reflection_applied_count,
+                    "reflection_skipped": len(summaries) - reflection_applied_count
+                }
+            
+            return response
         
         # Single topic - use existing logic
         else:
@@ -641,6 +1062,7 @@ async def multi_summary(
         result["search_method"] = "full_document"
         
     return result
+
 
 # -------- Ask -------------------------------------------------------
 @app.get("/ask")
