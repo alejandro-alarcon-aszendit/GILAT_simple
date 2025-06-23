@@ -231,7 +231,41 @@ elif page == "📝 Summarize":
             for doc in st.session_state.context_docs:
                 st.write(f"• **{doc['name']}** ({doc['n_chunks']} chunks)")
         
+        # Summary mode selection
+        st.subheader("🎯 Summary Mode")
+        summary_mode = st.radio(
+            "Choose summarization approach:",
+            ["📄 Full Document Summary", "🔍 Query-Focused Summary"],
+            help="Full Document: Summarize entire documents. Query-Focused: Focus on specific topics using vector search."
+        )
+        
+        # Query input for focused summary
+        query_text = ""
+        top_k = 10
+        if summary_mode == "🔍 Query-Focused Summary":
+            st.subheader("🔍 Focus Query")
+            query_text = st.text_area(
+                "What topic or aspect would you like the summary to focus on?",
+                placeholder="e.g., 'machine learning algorithms', 'financial performance', 'project timeline'...",
+                height=80,
+                help="Enter a specific topic, question, or aspect you want the summary to focus on. The system will find the most relevant content using vector similarity search."
+            )
+            
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                if query_text:
+                    st.info(f"📌 **Focus topic:** {query_text}")
+            with col2:
+                top_k = st.number_input(
+                    "Max relevant chunks:",
+                    min_value=5,
+                    max_value=50,
+                    value=10,
+                    help="Maximum number of relevant text chunks to include in the focused summary"
+                )
+        
         # Summary options
+        st.subheader("📏 Summary Options")
         length = st.selectbox(
             "Summary length:",
             ["short", "medium", "long"],
@@ -239,14 +273,27 @@ elif page == "📝 Summarize":
             help="Choose summary length: short (≈3 sentences), medium (≈8 sentences), long (≈15 sentences)"
         )
         
-        if st.button("Generate Summary", type="primary"):
+        # Generate summary button
+        can_generate = True
+        if summary_mode == "🔍 Query-Focused Summary" and not query_text.strip():
+            can_generate = False
+            st.warning("⚠️ Please enter a focus query for query-focused summarization.")
+        
+        if st.button("Generate Summary", type="primary", disabled=not can_generate):
             doc_ids = [doc['id'] for doc in st.session_state.context_docs]
             
+            # Prepare parameters
+            params = {
+                "doc_id": doc_ids,
+                "length": length
+            }
+            
+            # Add query parameters if in focused mode
+            if summary_mode == "🔍 Query-Focused Summary" and query_text.strip():
+                params["query"] = query_text.strip()
+                params["top_k"] = top_k
+            
             with st.spinner("Generating summary..."):
-                params = {
-                    "doc_id": doc_ids,
-                    "length": length
-                }
                 result = api_request("GET", "/summary", params=params)
                 
                 if result and 'summary' in result:
@@ -257,6 +304,12 @@ elif page == "📝 Summarize":
                     with st.expander("📊 Summary Details"):
                         st.write(f"**Documents processed:** {len(result.get('documents', []))}")
                         st.write(f"**Summary length:** {length}")
+                        st.write(f"**Chunks processed:** {result.get('chunks_processed', 'N/A')}")
+                        st.write(f"**Search method:** {result.get('search_method', 'N/A')}")
+                        
+                        if result.get('query'):
+                            st.write(f"**Focus query:** {result.get('query')}")
+                            st.info("💡 This summary was generated using vector similarity search to find the most relevant content for your query.")
 
 # Ask Questions Page
 elif page == "❓ Ask Questions":

@@ -214,6 +214,7 @@ def build_summary_graph():
 
     def _summarise(state):
         docs = state.get("docs", [])
+        query_context = state.get("query_context", "")
         
         if not docs:
             return {"summary": "No content to summarize."}
@@ -230,6 +231,20 @@ def build_summary_graph():
                 summary_text = result
             else:
                 summary_text = str(result) if result else "Unable to generate summary."
+            
+            # If we have query context, enhance the summary with it
+            if query_context and summary_text and summary_text != "Unable to generate summary.":
+                enhanced_prompt = f"""
+                Based on the following summary, provide a refined version that emphasizes aspects related to: {query_context}
+                
+                Original summary:
+                {summary_text}
+                
+                Please ensure the refined summary maintains accuracy while highlighting relevant information about the specified topic.
+                """
+                enhanced_result = LLM.invoke(enhanced_prompt)
+                if hasattr(enhanced_result, 'content'):
+                    summary_text = enhanced_result.content.strip()
                 
             return {"summary": summary_text}
         except Exception as e:
@@ -316,6 +331,8 @@ async def delete_document(doc_id: str):
 async def multi_summary(
     doc_id: List[str] = Query(...),
     length: str = Query("medium", enum=["short", "medium", "long"]),
+    query: str = Query(None, description="Optional query/topic to focus the summary on specific aspects"),
+    top_k: int = Query(10, description="Number of most relevant chunks to include when using query-focused summarization"),
 ):
     with db_session() as s:
         docs_meta = s.exec(select(Doc).where(Doc.id.in_(doc_id))).all()
@@ -323,24 +340,66 @@ async def multi_summary(
     if not_ready:
         raise HTTPException(409, f"Documents not ready: {not_ready}")
 
-    all_docs: List[Document] = []
-    for d in doc_id:
-        all_docs.extend(load_chunks(d))
+    # If query is provided, use vector similarity search to get relevant chunks
+    if query and query.strip():
+        relevant_docs: List[Document] = []
+        for d in doc_id:
+            vs = load_vectorstore(d)
+            retrieved = vs.similarity_search(query.strip(), k=top_k)
+            relevant_docs.extend(retrieved)
+        
+        if not relevant_docs:
+            return {"summary": f"No relevant content found for the query: '{query}'", "documents": doc_id, "query": query}
+        
+        all_docs = relevant_docs
+        summary_context = f"focusing on aspects related to: {query}"
+    else:
+        # Original behavior: load all chunks
+        all_docs: List[Document] = []
+        for d in doc_id:
+            all_docs.extend(load_chunks(d))
+        summary_context = "covering all content"
 
-    summary_state = SUMMARY_GRAPH.invoke({"docs": all_docs})
+    if not all_docs:
+        return {"summary": "No content available for summarization.", "documents": doc_id, "query": query}
+
+    # Prepare state for summary graph
+    summary_input = {"docs": all_docs}
+    if query and query.strip():
+        summary_input["query_context"] = query.strip()
+    
+    summary_state = SUMMARY_GRAPH.invoke(summary_input)
     summary = summary_state.get("summary", "Unable to generate summary.") if summary_state else "Unable to generate summary."
     
     if not summary or summary == "Unable to generate summary." or summary == "No content to summarize.":
-        return {"summary": "No content available for summarization.", "documents": doc_id}
+        return {"summary": "No content available for summarization.", "documents": doc_id, "query": query}
     
     summary = summary.strip()
     target = {"short": "≈3 sentences", "medium": "≈8 sentences", "long": "≈15 sentences"}[length]
-    refined = LLM.invoke(
-        f"Rewrite this summary so it fits {target} while preserving key info:\n\n{summary}"
-    )
+    
+    # Include query context in the refinement prompt if a query was provided
+    if query and query.strip():
+        refinement_prompt = f"Rewrite this summary so it fits {target} while preserving key info, {summary_context}:\n\n{summary}"
+    else:
+        refinement_prompt = f"Rewrite this summary so it fits {target} while preserving key info:\n\n{summary}"
+    
+    refined = LLM.invoke(refinement_prompt)
     
     final_summary = refined.content.strip() if hasattr(refined, 'content') else str(refined).strip()
-    return {"summary": final_summary, "documents": doc_id}
+    
+    result = {
+        "summary": final_summary, 
+        "documents": doc_id,
+        "chunks_processed": len(all_docs)
+    }
+    
+    if query and query.strip():
+        result["query"] = query
+        result["search_method"] = "vector_similarity"
+    else:
+        result["search_method"] = "full_document"
+        
+    return result
 
 # -------- Ask -------------------------------------------------------
 @app.get("/ask")

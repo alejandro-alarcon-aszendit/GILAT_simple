@@ -2,58 +2,58 @@
 
 ---
 
-## 1 · Overview
+## 1 · Overview
 
-A micro‑service that ingests arbitrary documents (PDF, DOCX, TXT, …) and exposes:
+A micro‑service that ingests arbitrary documents (PDF, DOCX, TXT, …) and exposes:
 
 - **Semantic Q&A** (`GET /ask`)
 - **Multi‑document summarisation** (`GET /summary`)
 - **Document catalogue & life‑cycle management**
 
-Key traits  ▶︎
+Key traits ▶︎
 
 - **FastAPI** REST API
 - **LangChain + LangGraph** orchestration
 - **OpenAI** GPT‑4o‑mini + text‑embedding‑ada‑002
-- **Persistent vector store** – ChromaDB (per document directory)
-- **Relational metadata** – SQLModel (SQLite / PostgreSQL)
-- **Background ingestion** – Celery + Redis
+- **Persistent vector store** – ChromaDB (per document directory)
+- **Relational metadata** – SQLModel (SQLite / PostgreSQL)
+- **Background ingestion** – Celery + Redis
 
 ---
 
-## 2 · High‑level Architecture
+## 2 · High‑level Architecture
 
 ```
-┌──────────────┐   1 HTTP POST    ┌────────────────────┐
-│   Client     │ ───────────────▶ │  FastAPI / Gunicorn │
-└──────────────┘                  │  (web pod)         │
+┌──────────────┐   1 HTTP POST    ┌────────────────────┐
+│   Client     │ ───────────────▶ │  FastAPI / Gunicorn │
+└──────────────┘                  │  (web pod)         │
         ▲                         └────────┬───────────┘
-        │2 status polls / queries            │enqueue task
+        │2 status polls / queries            │enqueue task
         │                                    ▼
-┌──────────────┐  4 store metadata   ┌────────────────────┐
-│ PostgreSQL   │◄─────────────────── │    Celery worker   │
+┌──────────────┐  4 store metadata   ┌────────────────────┐
+│ PostgreSQL   │◄─────────────────── │    Celery worker   │
 └──────────────┘                    │  parse → embed     │
-                                    │  persist vectors   │
-┌──────────────┐  3 vector persist   └────────────────────┘
+                                    │  persist vectors   │
+┌──────────────┐  3 vector persist   └────────────────────┘
 │ ChromaDB dir │◄──────────────────────────────────────────┘
 └──────────────┘
 ```
 
-1. **Upload** → API saves a *processing* record and enqueues `ingest_task`.
+1. **Upload** → API saves a *processing* record and enqueues `ingest_task`.
 2. Client polls `/documents/{id}` until `status: ready`.
-3. Worker writes embeddings to `vector_db/<doc_id>/` (Chroma) + `chunks.json`.
+3. Worker writes embeddings to `vector_db/<doc_id>/` (Chroma) + `chunks.json`.
 4. Worker updates DB (`status: ready`, `n_chunks`).
 
 ---
 
-## 3 · Installation (local dev)
+## 3 · Installation (local dev)
 
 ```bash
 # clone repo
 pip install -r requirements.txt  # or copy the list below
 export OPENAI_API_KEY=sk‑…
 # optional: run postgres; fallback to SQLite works out of the box
-redis-server &                    # needs Redis ≥ 6
+redis-server &                    # needs Redis ≥ 6
 uvicorn agent_app:app --reload    # web pod
 celery -A agent_app.celery_app worker -l info  # worker pod
 ```
@@ -69,7 +69,7 @@ celery redis
 
 ---
 
-## 4 · Environment variables
+## 4 · Environment variables
 
 | Var              | Default                    | Purpose                 |
 | ---------------- | -------------------------- | ----------------------- |
@@ -79,7 +79,7 @@ celery redis
 
 ---
 
-## 5 · Directory layout
+## 5 · Directory layout
 
 ```
 .
@@ -93,22 +93,22 @@ celery redis
 
 ---
 
-## 6 · API Reference
+## 6 · API Reference
 
-### 6.1 Upload Document
+### 6.1 Upload Document
 
 `POST /documents`
 
 | Field                      | Type                | Notes                |
 | -------------------------- | ------------------- | -------------------- |
-| file (🗋)                  | multipart/form‑data | any supported format |
-| **Returns** `202 Accepted` |                     |                      |
+| file (🗋)                  | multipart/form‑data | any supported format |
+| **Returns** `202 Accepted` |                     |                      |
 
 ```json
 { "doc_id": "<uuid>", "status": "processing" }
 ```
 
-### 6.2 List Documents
+### 6.2 List Documents
 
 `GET /documents`
 
@@ -119,34 +119,38 @@ celery redis
 ]
 ```
 
-### 6.3 Document Detail / Status
+### 6.3 Document Detail / Status
 
 `GET /documents/{id}` → same schema as above.
 
-### 6.4 Delete Document
+### 6.4 Delete Document
 
 `DELETE /documents/{id}` → `{ "status": "deleted", "doc_id": "…" }`
 
-### 6.5 Multi‑Document Summary
+### 6.5 Multi‑Document Summary
 
-`GET /summary?doc_id=id1&doc_id=id2&length=medium`
+`GET /summary?doc_id=id1&doc_id=id2&length=medium&query=<topic>&top_k=10`
 
-| Query                                | Description                                  |
-| ------------------------------------ | -------------------------------------------- |
-| `doc_id`                             | repeatable – one or more UUIDs               |
-| `length`                             | `short` ≈ 3 sent., `medium` ≈ 8, `long` ≈ 15 |
-| **409** if any document not `ready`. |                                              |
+| Query                                 | Description                                                       |
+| ------------------------------------- | ----------------------------------------------------------------- |
+| `doc_id`                              | repeatable – one or more UUIDs                                   |
+| `length`                              | `short` ≈ 3 sent., `medium` ≈ 8, `long` ≈ 15                      |
+| `query` (optional)                    | topic/query to focus summary on using vector similarity search   |
+| `top_k` (optional)                    | max relevant chunks when using query-focused mode (default: 10)  |
+| **409** if any document not `ready`. |                                                                   |
 
-### 6.6 Semantic Q&A
+**Query-Focused Summarization:** When `query` parameter is provided, the system performs vector similarity search to find the most relevant content chunks across all specified documents, then summarizes only those relevant portions. This enables focused summaries on specific topics rather than general document summaries.
+
+### 6.6 Semantic Q&A
 
 `GET /ask?q=<question>&doc_id=<id>&doc_id=<id>&top_k=3`
 
-- `q` – free‑text question
-- `top_k` – retrieved chunks per document (default 3)
+- `q` – free‑text question
+- `top_k` – retrieved chunks per document (default 3)
 
 ---
 
-## 7 · Database Schema
+## 7 · Database Schema
 
 ```sql
 CREATE TABLE doc (
@@ -160,7 +164,7 @@ CREATE TABLE doc (
 
 ---
 
-## 8 · Background Ingestion Flow
+## 8 · Background Ingestion Flow
 
 1. **Celery task **``
    - parse → `docling` → Markdown
@@ -172,19 +176,19 @@ CREATE TABLE doc (
 
 ---
 
-## 9 · How to Deploy
+## 9 · How to Deploy
 
-- **Docker / Compose** – single‑host dev:
+- **Docker / Compose** – single‑host dev:
   - `api` image (FastAPI + Gunicorn)
   - `worker` image (Celery)
   - `redis`
   - `postgres`
-- **Kubernetes** – 2 deployments (`api`, `worker`) + 2 stateful services (`redis`, `postgres`).
+- **Kubernetes** – 2 deployments (`api`, `worker`) + 2 stateful services (`redis`, `postgres`).
 - Mount `vector_db` on persistent volume claim (PVC) or switch to S3‑backed Chroma.
 
 ---
 
-## 10 · Testing
+## 10 · Testing
 
 ```bash
 pytest tests/            # unit + httpx integration tests
@@ -195,14 +199,14 @@ Mock LLM via `langchain.chat_models.fake.FakeListChatModel` for CI.
 
 ---
 
-## 11 · Extension Points
+## 11 · Extension Points
 
 - Swap Chroma for Weaviate / Pinecone by replacing `langchain.vectorstores.Chroma` wrapper.
 - Add topic segmentation endpoint (`/segments`) using embeddings + K‑Means.
 - Enable SSE / WebSocket to stream token responses or ingest task progress.
-- Implement OAuth / JWT to secure endpoints per user.
+- Implement OAuth / JWT to secure endpoints per user.
 
 ---
 
-© 2025 LangGraph Doc Service • MIT
+© 2025 LangGraph Doc Service • MIT
 
