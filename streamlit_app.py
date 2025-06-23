@@ -102,25 +102,63 @@ page = st.sidebar.selectbox(
 if page == "📋 Document Management":
     st.header("📋 Document Management")
     
-    # Document upload section
-    st.subheader("📤 Upload New Document")
-    uploaded_file = st.file_uploader(
-        "Choose a file to upload",
-        type=['txt', 'md', 'pdf'],
-        help="Supported formats: TXT, MD, PDF"
-    )
+    # Document input section with tabs
+    st.subheader("📤 Add New Document")
     
-    if uploaded_file and st.button("Upload Document", type="primary"):
-        with st.spinner("Uploading and processing document..."):
-            files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
-            result = api_request("POST", "/documents", files=files)
-            
-            if result:
-                st.success(f"✅ Document uploaded successfully!")
-                st.info(f"Document ID: {result.get('doc_id', 'N/A')}")
-                st.info(f"Chunks created: {result.get('n_chunks', 'N/A')}")
-                time.sleep(1)
-                st.rerun()
+    # Create tabs for different input methods
+    tab1, tab2 = st.tabs(["📁 Upload File", "🌐 Fetch from URL"])
+    
+    with tab1:
+        uploaded_file = st.file_uploader(
+            "Choose a file to upload",
+            type=['txt', 'md', 'pdf'],
+            help="Supported formats: TXT, MD, PDF"
+        )
+        
+        if uploaded_file and st.button("Upload Document", type="primary", key="upload_file"):
+            with st.spinner("Uploading and processing document..."):
+                files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
+                result = api_request("POST", "/documents", files=files)
+                
+                if result:
+                    st.success(f"✅ Document uploaded successfully!")
+                    st.info(f"Document ID: {result.get('doc_id', 'N/A')}")
+                    st.info(f"Chunks created: {result.get('n_chunks', 'N/A')}")
+                    time.sleep(1)
+                    st.rerun()
+    
+    with tab2:
+        url_input = st.text_input(
+            "Enter URL to fetch content:",
+            placeholder="https://example.com/article",
+            help="Enter a valid URL to fetch and process web content"
+        )
+        
+        name_input = st.text_input(
+            "Document name (optional):",
+            placeholder="Custom name for this document",
+            help="Optional: Provide a custom name, otherwise the URL will be used"
+        )
+        
+        if url_input and st.button("Fetch from URL", type="primary", key="fetch_url"):
+            # Basic URL validation
+            if not url_input.startswith(('http://', 'https://')):
+                st.error("❌ Please enter a valid URL starting with http:// or https://")
+            else:
+                with st.spinner("Fetching content from URL and processing..."):
+                    payload = {
+                        "url": url_input,
+                        "name": name_input if name_input.strip() else None
+                    }
+                    result = api_request("POST", "/documents/url", json=payload)
+                    
+                    if result:
+                        st.success(f"✅ URL content processed successfully!")
+                        st.info(f"Document ID: {result.get('doc_id', 'N/A')}")
+                        st.info(f"Chunks created: {result.get('n_chunks', 'N/A')}")
+                        st.info(f"Source: {result.get('source', 'N/A')}")
+                        time.sleep(1)
+                        st.rerun()
     
     st.divider()
     

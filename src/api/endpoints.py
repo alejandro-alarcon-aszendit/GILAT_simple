@@ -1,6 +1,7 @@
 """FastAPI endpoints for the Document Service.
 
 Modular API endpoints with clear separation of concerns.
+Supports both file uploads and URL content fetching.
 """
 
 import shutil
@@ -8,11 +9,19 @@ from typing import List
 from fastapi import File, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse
 from sqlmodel import select
+from pydantic import BaseModel, HttpUrl
 
 from src.models.database import Doc, get_db_session
 from src.models.schemas import DocOut, QAResponse
 from src.services.document_service import DocumentService
+from src.services.web_content_service import WebContentService
 from src.core.config import llm
+
+
+class URLIngestRequest(BaseModel):
+    """Request model for URL ingestion."""
+    url: HttpUrl
+    name: str = None  # Optional custom name for the document
 
 
 class DocumentEndpoints:
@@ -50,6 +59,53 @@ class DocumentEndpoints:
                     session.add(doc)
                     session.commit()
             raise HTTPException(500, f"Document processing failed: {str(e)}")
+    
+    @staticmethod
+    async def ingest_url(request: URLIngestRequest):
+        """Fetch content from a URL and process it as a document.
+        
+        **URL Processing Pipeline:**
+        1. Validate URL format
+        2. Create document record in database
+        3. Fetch content from URL using WebContentService
+        4. Process content (split → embed → persist)
+        5. Update database with results
+        
+        Args:
+            request: URLIngestRequest containing URL and optional name
+        
+        Returns:
+            Document metadata with processing results
+        """
+        url = str(request.url)
+        document_name = request.name or url
+        
+        # 1. Validate URL
+        if not WebContentService.is_valid_url(url):
+            raise HTTPException(400, f"Invalid URL format: {url}")
+        
+        # 2. Create document record
+        doc_id = await DocumentService.create_document_record(document_name)
+        
+        try:
+            # 3. Process URL content (fetch → split → embed → persist)
+            n_chunks = DocumentService.ingest_url(doc_id, url)
+            return {
+                "doc_id": doc_id, 
+                "status": "ready", 
+                "n_chunks": n_chunks,
+                "source_type": "url",
+                "source": url
+            }
+        except Exception as e:
+            # If processing fails, update status and raise error
+            with get_db_session() as session:
+                doc = session.get(Doc, doc_id)
+                if doc:
+                    doc.status = "failed"
+                    session.add(doc)
+                    session.commit()
+            raise HTTPException(500, f"URL processing failed: {str(e)}")
     
     @staticmethod
     async def list_documents():

@@ -1,6 +1,7 @@
 """Document processing service.
 
 Handles document parsing, chunking, embedding, and vector storage.
+Supports both file uploads and URL content fetching.
 """
 
 import json
@@ -15,6 +16,7 @@ from docling.document_converter import DocumentConverter
 
 from src.core.config import BASE_DIR, CHUNK_FILE, embedder, splitter
 from src.models.database import Doc, get_db_session
+from src.services.web_content_service import WebContentService
 
 
 class DocumentService:
@@ -212,11 +214,69 @@ class DocumentService:
             Path(tmp_path).unlink(missing_ok=True)
     
     @staticmethod
+    def ingest_url(doc_id: str, url: str) -> int:
+        """Complete URL ingestion pipeline.
+        
+        **URL Processing Pipeline:**
+        1. Fetch content from URL
+        2. Split into chunks
+        3. Create embeddings and vector store
+        4. Update database status
+        
+        Args:
+            doc_id: Unique document identifier
+            url: URL to fetch content from
+            
+        Returns:
+            Number of chunks created
+            
+        Raises:
+            Exception: If any step in the pipeline fails
+        """
+        try:
+            # 1. Fetch content from URL
+            text = WebContentService.fetch_url_content(url)
+            
+            # 2. Split into chunks with metadata
+            docs = DocumentService.split_text(text)
+            
+            # Add URL metadata to chunks
+            for doc in docs:
+                doc.metadata.update({
+                    "source_type": "url",
+                    "source": url
+                })
+            
+            # 3. Create vector store and persist
+            DocumentService.create_vector_store(docs, doc_id)
+            
+            # 4. Update database
+            with get_db_session() as session:
+                doc = session.get(Doc, doc_id)
+                if doc:
+                    doc.status = "ready"
+                    doc.n_chunks = len(docs)
+                    session.add(doc)
+                    session.commit()
+            
+            return len(docs)
+            
+        except Exception as exc:
+            # Handle errors and update status
+            with get_db_session() as session:
+                doc = session.get(Doc, doc_id)
+                if doc:
+                    doc.status = "failed"
+                    session.add(doc)
+                    session.commit()
+            raise exc
+    
+    @staticmethod
     async def create_document_record(filename: str) -> str:
         """Create a new document record in the database.
         
         Args:
-            filename: Original filename
+            filename: Original filename or URL
             
         Returns:
             Generated document ID

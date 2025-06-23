@@ -1,6 +1,7 @@
 """Main FastAPI application for the Document Service.
 
 Modular FastAPI application with clear structure and parallel workload visibility.
+Supports both file uploads and URL content fetching.
 """
 
 from fastapi import FastAPI
@@ -21,6 +22,9 @@ def create_app() -> FastAPI:
     # Document management endpoints
     app.post("/documents", status_code=201, response_model=dict)(
         DocumentEndpoints.upload_document
+    )
+    app.post("/documents/url", status_code=201, response_model=dict)(
+        DocumentEndpoints.ingest_url
     )
     app.get("/documents", response_model=list[DocOut])(
         DocumentEndpoints.list_documents
@@ -51,6 +55,7 @@ def create_app() -> FastAPI:
             "status": "running",
             "features": [
                 "Document upload and processing",
+                "URL content fetching and processing",
                 "Multi-topic parallel summarization",
                 "AI reflection for quality improvement", 
                 "Vector similarity search",

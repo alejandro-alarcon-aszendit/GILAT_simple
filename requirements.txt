@@ -5,6 +5,7 @@ uvicorn[standard]
 # LangChain ecosystem
 langchain
 langchain-openai
+langchain-community  # For additional document loaders
 langgraph
 
 # Database and ORM
@@ -29,4 +30,10 @@ python-dotenv
 
 # UI and API client
 streamlit
-requests 
+requests
+
+# Web content fetching
+firecrawl-py  # Professional web scraping service
+beautifulsoup4  # HTML parsing
+lxml  # XML/HTML parser
+aiohttp  # Async HTTP client 
