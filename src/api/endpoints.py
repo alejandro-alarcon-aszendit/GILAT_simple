@@ -28,6 +28,15 @@ class DocumentEndpoints:
     """Endpoints for document management operations."""
     
     @staticmethod
+    async def get_supported_formats():
+        """Get all supported document formats.
+        
+        Returns:
+            Dictionary with supported formats organized by category
+        """
+        return DocumentService.get_supported_formats()
+    
+    @staticmethod
     async def upload_document(file: UploadFile = File(...)):
         """Upload and process a document.
         

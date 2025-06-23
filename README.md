@@ -4,7 +4,7 @@
 
 ## 1 · Overview
 
-A micro‑service that ingests arbitrary documents (PDF, DOCX, TXT, …) and exposes:
+A micro‑service that ingests arbitrary documents (PDF, DOCX, XLSX, PPTX, TXT, MD, HTML, CSV, Images, XML, …) and exposes:
 
 - **Semantic Q&A** (`GET /ask`)
 - **Multi‑document summarisation** (`GET /summary`)
@@ -95,7 +95,26 @@ celery redis
 
 ## 6 · API Reference
 
-### 6.1 Upload Document
+### 6.1 Get Supported Formats
+
+`GET /formats`
+
+Returns all supported document formats organized by category:
+
+```json
+{
+  "text_formats": [".txt", ".md", ".adoc"],
+  "office_documents": [".pdf", ".docx", ".xlsx", ".pptx"],
+  "web_formats": [".html", ".xhtml"],
+  "data_formats": [".csv"],
+  "image_formats": [".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"],
+  "xml_formats": [".xml"],
+  "description": { ... },
+  "all_extensions": [ ... ]
+}
+```
+
+### 6.2 Upload Document
 
 `POST /documents`
 
@@ -108,7 +127,7 @@ celery redis
 { "doc_id": "<uuid>", "status": "processing" }
 ```
 
-### 6.2 List Documents
+### 6.3 List Documents
 
 `GET /documents`
 
@@ -119,15 +138,15 @@ celery redis
 ]
 ```
 
-### 6.3 Document Detail / Status
+### 6.4 Document Detail / Status
 
 `GET /documents/{id}` → same schema as above.
 
-### 6.4 Delete Document
+### 6.5 Delete Document
 
 `DELETE /documents/{id}` → `{ "status": "deleted", "doc_id": "…" }`
 
-### 6.5 Multi‑Document Summary
+### 6.6 Multi‑Document Summary
 
 `GET /summary?doc_id=id1&doc_id=id2&length=medium&query=<topic>&top_k=10`
 
@@ -143,7 +162,7 @@ celery redis
 
 **Multi-Topic Parallel Processing:** Use comma-separated topics (e.g., `query=machine learning,financial performance,project timeline`) to generate separate focused summaries for each topic processed in parallel using LangGraph's map-reduce pattern. Each topic gets its own vector similarity search and summary generation.
 
-### 6.6 Semantic Q&A
+### 6.7 Semantic Q&A
 
 `GET /ask?q=<question>&doc_id=<id>&doc_id=<id>&top_k=3`
 

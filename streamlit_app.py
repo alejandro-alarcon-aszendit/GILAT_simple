@@ -111,8 +111,21 @@ if page == "📋 Document Management":
     with tab1:
         uploaded_file = st.file_uploader(
             "Choose a file to upload",
-            type=['txt', 'md', 'pdf'],
-            help="Supported formats: TXT, MD, PDF"
+            type=[
+                # Text formats
+                'txt', 'md', 'adoc',
+                # Office documents  
+                'pdf', 'docx', 'xlsx', 'pptx',
+                # Web formats
+                'html', 'xhtml',
+                # Data formats
+                'csv',
+                # Image formats
+                'png', 'jpg', 'jpeg', 'tiff', 'tif', 'bmp', 'webp',
+                # XML formats
+                'xml'
+            ],
+            help="Supported formats: TXT, MD, AsciiDoc, PDF, DOCX, XLSX, PPTX, HTML, CSV, Images (PNG/JPG/TIFF/BMP/WEBP), XML"
         )
         
         if uploaded_file and st.button("Upload Document", type="primary", key="upload_file"):

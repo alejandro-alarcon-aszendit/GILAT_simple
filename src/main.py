@@ -20,6 +20,9 @@ def create_app() -> FastAPI:
     )
     
     # Document management endpoints
+    app.get("/formats")(
+        DocumentEndpoints.get_supported_formats
+    )
     app.post("/documents", status_code=201, response_model=dict)(
         DocumentEndpoints.upload_document
     )

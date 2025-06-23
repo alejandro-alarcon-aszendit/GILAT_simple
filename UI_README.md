@@ -5,7 +5,7 @@ A beautiful and user-friendly web interface for the LangGraph Document Service A
 ## 🌟 Features
 
 ### 📋 Document Management
-- **Upload Documents**: Support for TXT, MD, and PDF files
+- **Upload Documents**: Support for TXT, MD, PDF, DOCX, XLSX, PPTX, HTML, CSV, Images (PNG/JPG/TIFF/BMP/WEBP), XML, and AsciiDoc files
 - **Document Library**: View all documents with search and filtering
 - **Context Management**: Add/remove documents to/from working context
 - **Document Deletion**: Safe deletion with confirmation

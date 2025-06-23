@@ -23,6 +23,35 @@ class DocumentService:
     """Service for handling document operations."""
     
     @staticmethod
+    def get_supported_formats() -> dict:
+        """Get all supported document formats organized by category.
+        
+        Returns:
+            Dictionary with format categories and their supported extensions
+        """
+        return {
+            "text_formats": [".txt", ".md", ".adoc"],
+            "office_documents": [".pdf", ".docx", ".xlsx", ".pptx"], 
+            "web_formats": [".html", ".xhtml"],
+            "data_formats": [".csv"],
+            "image_formats": [".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"],
+            "xml_formats": [".xml"],
+            "description": {
+                "text_formats": "Plain text, Markdown, and AsciiDoc files",
+                "office_documents": "PDF and Microsoft Office documents",
+                "web_formats": "HTML and XHTML web pages", 
+                "data_formats": "Comma-separated value files",
+                "image_formats": "Common image formats with OCR capabilities",
+                "xml_formats": "XML files including USPTO and JATS formats"
+            },
+            "all_extensions": [
+                ".txt", ".md", ".adoc", ".pdf", ".docx", ".xlsx", ".pptx",
+                ".html", ".xhtml", ".csv", ".png", ".jpg", ".jpeg", 
+                ".tiff", ".tif", ".bmp", ".webp", ".xml"
+            ]
+        }
+    
+    @staticmethod
     def parse_document(file_path: str) -> str:
         """Parse document content based on file type.
         
@@ -38,13 +67,17 @@ class DocumentService:
         file_path = Path(file_path)
         file_extension = file_path.suffix.lower()
         
+        # Get supported formats (excluding plain text which we handle separately)
+        supported_formats = DocumentService.get_supported_formats()
+        docling_formats = set(supported_formats["all_extensions"]) - {".txt"}
+        
         try:
             if file_extension in ['.txt']:
                 # Simple text reading for plain text files
                 with open(file_path, 'r', encoding='utf-8') as f:
                     text = f.read()
-            elif file_extension in ['.pdf', '.md', '.docx', '.pptx', '.html']:
-                # Use docling for supported document formats
+            elif file_extension in docling_formats:
+                # Use docling for all supported document formats
                 converter = DocumentConverter()
                 result = converter.convert(file_path)
                 
