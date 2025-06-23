@@ -41,19 +41,13 @@ class LLMConfig:
 class ParallelConfig:
     """Configuration for parallel processing workloads."""
     
-    # Maximum concurrent workers for different operations
-    MAX_TOPIC_WORKERS = 5  # For multi-topic summary processing
-    MAX_DOCUMENT_WORKERS = 3  # For document ingestion
-    MAX_REFLECTION_WORKERS = 3  # For reflection processing
+    # Maximum concurrent workers for LangGraph parallel processing
+    MAX_TOPIC_WORKERS = 5  # For multi-topic summary processing via LangGraph Send API
     
     # Timeouts and limits
     PROCESSING_TIMEOUT = 300  # 5 minutes
     MAX_CHUNKS_PER_TOPIC = 20  # Limit chunks for reflection to avoid token limits
     MAX_SOURCE_CONTENT_LENGTH = 4000  # Truncate source content for reflection
-    
-    # Reflection behavior
-    REFLECTION_DEFAULT_ENABLED = False  # Conservative: disable by default
-    REFLECTION_CONSERVATIVE_MODE = True  # Use conservative improvement prompts
 
 # -------------------- API Configuration -------------------------
 class APIConfig:
