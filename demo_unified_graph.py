@@ -10,8 +10,9 @@ import asyncio
 from typing import List
 
 # Import both old and new implementations for comparison
-from src.graphs.summary import MULTI_TOPIC_SUMMARY_GRAPH
-from src.graphs.reflection import MULTI_TOPIC_SUMMARY_WITH_REFLECTION_GRAPH
+# Legacy graphs removed - now using unified approach
+# from src.graphs.summary import MULTI_TOPIC_SUMMARY_GRAPH
+# from src.graphs.reflection import MULTI_TOPIC_SUMMARY_WITH_REFLECTION_GRAPH
 from src.graphs.unified_summary_reflection import UNIFIED_SUMMARY_REFLECTION_GRAPH
 
 

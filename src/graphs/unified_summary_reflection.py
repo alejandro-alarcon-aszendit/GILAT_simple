@@ -6,8 +6,10 @@ graph that uses LangGraph's Send API for true parallel processing without Thread
 
 import time
 import operator
+import re
 from typing import List, Dict, Any, Annotated
 from typing_extensions import TypedDict
+from collections import Counter
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send
 from langchain.chains.summarize import load_summarize_chain
@@ -28,6 +30,7 @@ class UnifiedState(TypedDict):
     doc_ids: List[str]
     top_k: int
     length: str
+    strategy: str
     enable_reflection: bool
     
     # Intermediate state for Send routing
@@ -48,9 +51,150 @@ class TopicState(TypedDict):
     docs: List[Document]
     source_content: str
     length: str
+    strategy: str
     enable_reflection: bool
     contributing_docs: List[str]
     doc_count: int
+
+
+def _extractive_summarization(docs: List[Document], query_context: str = ""):
+    """Extract key sentences from documents using frequency-based scoring.
+    
+    Args:
+        docs: List of documents to summarize
+        query_context: Optional query to boost relevant sentences
+        
+    Returns:
+        dict with 'summary' key containing extracted sentences
+    """
+    if not docs:
+        return {"summary": "No content to summarize."}
+    
+    # Combine all document content
+    combined_text = "\n".join([doc.page_content for doc in docs])
+    
+    # Split into sentences
+    sentences = re.split(r'[.!?]+', combined_text)
+    sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) > 20]
+    
+    if not sentences:
+        return {"summary": "No extractable sentences found."}
+    
+    # Remove stop words and calculate word frequencies
+    stop_words = set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'])
+    words = re.findall(r'\b[a-zA-Z]+\b', combined_text.lower())
+    word_freq = Counter([word for word in words if word not in stop_words])
+    
+    # Score sentences based on word frequency
+    sentence_scores = []
+    for sentence in sentences:
+        sentence_words = re.findall(r'\b[a-zA-Z]+\b', sentence.lower())
+        score = sum(word_freq.get(word, 0) for word in sentence_words if word not in stop_words)
+        
+        # Boost score if query context matches
+        if query_context and query_context.lower() in sentence.lower():
+            score *= 1.5
+            
+        sentence_scores.append((sentence, score))
+    
+    # Sort by score and select top sentences
+    sentence_scores.sort(key=lambda x: x[1], reverse=True)
+    top_sentences = [sentence for sentence, _ in sentence_scores[:5]]  # Top 5 sentences
+    
+    # Join sentences for final summary
+    summary = ". ".join(top_sentences)
+    if summary and not summary.endswith('.'):
+        summary += "."
+    
+    return {"summary": summary}
+
+
+def _abstractive_summarization(docs: List[Document], query_context: str = ""):
+    """Generate new summary sentences using LLM abstractive capabilities.
+    
+    Args:
+        docs: List of documents to summarize
+        query_context: Optional query for focused summarization
+        
+    Returns:
+        dict with 'summary' key containing generated summary
+    """
+    if not docs:
+        return {"summary": "No content to summarize."}
+    
+    try:
+        # Use existing map-reduce chain for abstractive summarization
+        llm = LLMConfig.MAIN_LLM
+        chain = load_summarize_chain(llm, chain_type="map_reduce")
+        
+        # Add query context if provided
+        if query_context:
+            # Create a simple prompt-based summary for query-focused abstractive
+            combined_content = "\n".join([doc.page_content for doc in docs])
+            prompt = f"""
+            Create a comprehensive summary of the following content with special focus on: {query_context}
+            
+            Content:
+            {combined_content}
+            
+            Summary:
+            """
+            result = llm.invoke(prompt)
+            summary_text = result.content if hasattr(result, 'content') else str(result)
+        else:
+            # Use standard map-reduce chain
+            result = chain.run(docs)
+            summary_text = result
+        
+        return {"summary": summary_text.strip()}
+        
+    except Exception as e:
+        return {"summary": f"Error in abstractive summarization: {str(e)}"}
+
+
+def _hybrid_summarization(docs: List[Document], query_context: str = ""):
+    """Combine extractive and abstractive approaches for hybrid summarization.
+    
+    Args:
+        docs: List of documents to summarize
+        query_context: Optional query for focused summarization
+        
+    Returns:
+        dict with 'summary' key containing hybrid summary
+    """
+    if not docs:
+        return {"summary": "No content to summarize."}
+    
+    try:
+        # Step 1: Extract key sentences using extractive method
+        extractive_result = _extractive_summarization(docs, query_context)
+        extracted_content = extractive_result.get("summary", "")
+        
+        if not extracted_content or extracted_content == "No extractable sentences found.":
+            # Fallback to pure abstractive if extraction fails
+            return _abstractive_summarization(docs, query_context)
+        
+        # Step 2: Use LLM to refine and paraphrase extracted content
+        llm = LLMConfig.MAIN_LLM
+        
+        hybrid_prompt = f"""
+        The following text contains key sentences extracted from documents. Please refine this into a more cohesive and fluent summary while preserving the important information.
+        {f"Focus especially on aspects related to: {query_context}" if query_context else ""}
+        
+        Extracted content:
+        {extracted_content}
+        
+        Refined summary:
+        """
+        
+        result = llm.invoke(hybrid_prompt)
+        refined_summary = result.content if hasattr(result, 'content') else str(result)
+        
+        return {"summary": refined_summary.strip()}
+        
+    except Exception as e:
+        # Fallback to extractive if hybrid processing fails
+        return _extractive_summarization(docs, query_context)
 
 
 def build_unified_summary_reflection_graph():
@@ -71,6 +215,7 @@ def build_unified_summary_reflection_graph():
         doc_ids = state.get("doc_ids", [])
         top_k = state.get("top_k", 10)
         length = state.get("length", "medium")
+        strategy = state.get("strategy", "abstractive")
         enable_reflection = state.get("enable_reflection", True)
         
         if not topics or not doc_ids:
@@ -110,6 +255,7 @@ def build_unified_summary_reflection_graph():
                 "docs": topic_relevant_docs,
                 "source_content": source_content,
                 "length": length,
+                "strategy": strategy,
                 "enable_reflection": enable_reflection,
                 "contributing_docs": doc_sources,
                 "doc_count": len(topic_relevant_docs)
@@ -142,6 +288,7 @@ def build_unified_summary_reflection_graph():
         docs = state.get("docs", [])
         source_content = state.get("source_content", "")
         length = state.get("length", "medium")
+        strategy = state.get("strategy", "abstractive")
         enable_reflection = state.get("enable_reflection", True)
         
         print(f"  📝 Processing topic {topic_id}: '{topic}' with {len(docs)} docs...")
@@ -155,25 +302,25 @@ def build_unified_summary_reflection_graph():
                 "chunks_processed": 0,
                 "status": "no_content",
                 "processing_time": time.time() - start_time,
+                "strategy": strategy,
                 "reflection_applied": False
             }
             # Return single-item list - will be automatically aggregated by operator.add
             return {"topic_results": [result]}
         
         try:
-            # Step 1: Generate initial summary
-            chain = load_summarize_chain(LLMConfig.MAIN_LLM, chain_type="map_reduce")
-            result = chain.invoke({"input_documents": docs})
+            # Step 1: Generate initial summary using strategy
+            if strategy == "extractive":
+                summary_result = _extractive_summarization(docs, topic)
+            elif strategy == "hybrid":
+                summary_result = _hybrid_summarization(docs, topic)
+            else:  # default to abstractive
+                summary_result = _abstractive_summarization(docs, topic)
             
-            if isinstance(result, dict) and "output_text" in result:
-                initial_summary = result["output_text"]
-            elif isinstance(result, str):
-                initial_summary = result
-            else:
-                initial_summary = str(result) if result else "Unable to generate summary."
+            initial_summary = summary_result.get("summary", "Unable to generate summary.")
             
-            # Enhance with topic context
-            if initial_summary and initial_summary != "Unable to generate summary.":
+            # Enhance with topic context for abstractive/hybrid strategies
+            if strategy != "extractive" and initial_summary and initial_summary != "Unable to generate summary.":
                 target = {"short": "≈3 sentences", "medium": "≈8 sentences", "long": "≈15 sentences"}[length]
                 enhanced_prompt = f"""
                 Create a focused summary about "{topic}" based on the following content. 
@@ -239,6 +386,7 @@ def build_unified_summary_reflection_graph():
                 "chunks_processed": len(docs),
                 "status": "success",
                 "processing_time": processing_time,
+                "strategy": strategy,
                 **reflection_metadata
             }
             
@@ -256,6 +404,7 @@ def build_unified_summary_reflection_graph():
                 "chunks_processed": len(docs),
                 "status": "error",
                 "processing_time": processing_time,
+                "strategy": strategy,
                 "reflection_applied": False
             }
             

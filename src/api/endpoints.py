@@ -149,6 +149,7 @@ class SummaryEndpoints:
     async def multi_summary(
         doc_id: List[str] = Query(...),
         length: str = Query("medium", enum=["short", "medium", "long"]),
+        strategy: str = Query("abstractive", enum=["abstractive", "extractive", "hybrid"], description="Summarization strategy: abstractive (generates new sentences), extractive (selects key sentences), hybrid (combines both approaches)"),
         query: str = Query(None, description="Optional query/topic(s) to focus the summary on. Use commas to separate multiple topics for parallel processing."),
         top_k: int = Query(10, description="Number of most relevant chunks to include when using query-focused summarization"),
         enable_reflection: bool = Query(False, description="Enable AI reflection to review and improve summary quality, accuracy, and length compliance"),
@@ -183,6 +184,7 @@ class SummaryEndpoints:
                 doc_ids=doc_id,
                 top_k=top_k,
                 length=length,
+                strategy=strategy,
                 enable_reflection=enable_reflection
             )
         
@@ -190,11 +192,12 @@ class SummaryEndpoints:
         else:
             return await SummaryEndpoints._process_full_documents(
                 doc_ids=doc_id,
-                length=length
+                length=length,
+                strategy=strategy
             )
     
     @staticmethod
-    async def _process_multi_topic(topics, doc_ids, top_k, length, enable_reflection):
+    async def _process_multi_topic(topics, doc_ids, top_k, length, strategy, enable_reflection):
         """Process multiple topics in parallel using the unified LangGraph Send API."""
         from src.graphs.unified_summary_reflection import UNIFIED_SUMMARY_REFLECTION_GRAPH
         
@@ -203,6 +206,7 @@ class SummaryEndpoints:
             "doc_ids": doc_ids,
             "top_k": top_k,
             "length": length,
+            "strategy": strategy,
             "enable_reflection": enable_reflection
         }
         
@@ -243,6 +247,7 @@ class SummaryEndpoints:
             "type": response_type,
             "documents": doc_ids,
             "topics": topics,
+            "strategy": strategy,
             "total_chunks_processed": total_chunks,
             "successful_topics": len(successful_summaries),
             "total_topics": len(topics),
@@ -282,7 +287,7 @@ class SummaryEndpoints:
 
     
     @staticmethod
-    async def _process_full_documents(doc_ids, length):
+    async def _process_full_documents(doc_ids, length, strategy):
         """Process full documents without query filtering."""
         from langchain.docstore.document import Document
         
@@ -303,47 +308,73 @@ class SummaryEndpoints:
             doc_ids=doc_ids,
             query=None,
             length=length,
-            search_method="full_document"
+            search_method="full_document",
+            strategy=strategy
         )
     
     @staticmethod
-    async def _generate_summary(docs, doc_ids, query, length, search_method):
-        """Generate summary using the summary graph."""
-        from src.graphs.summary import SUMMARY_GRAPH
+    async def _generate_summary(docs, doc_ids, query, length, search_method, strategy):
+        """Generate summary using the unified graph for single summaries."""
+        from src.graphs.unified_summary_reflection import UNIFIED_SUMMARY_REFLECTION_GRAPH
         
-        # Prepare state for summary graph
-        summary_input = {"docs": docs}
-        if query:
-            summary_input["query_context"] = query
+        # Create a fake topic to use the unified graph for single summaries
+        # This allows us to use the same strategy-aware logic
+        fake_topic = query if query else "document summary"
         
-        summary_state = SUMMARY_GRAPH.invoke(summary_input)
-        summary = summary_state.get("summary", "Unable to generate summary.") if summary_state else "Unable to generate summary."
+        # Prepare input for unified graph
+        unified_input = {
+            "topics": [fake_topic],
+            "doc_ids": [],  # Empty since we're providing docs directly
+            "top_k": 10,
+            "length": length,
+            "strategy": strategy,
+            "enable_reflection": False
+        }
+        
+        # We need to temporarily modify the unified graph to handle direct docs
+        # For now, let's use a simpler approach with the strategy functions directly
+        from src.graphs.unified_summary_reflection import _extractive_summarization, _abstractive_summarization, _hybrid_summarization
+        
+        # Generate summary using strategy
+        if strategy == "extractive":
+            summary_result = _extractive_summarization(docs, query or "")
+        elif strategy == "hybrid":
+            summary_result = _hybrid_summarization(docs, query or "")
+        else:  # default to abstractive
+            summary_result = _abstractive_summarization(docs, query or "")
+        
+        summary = summary_result.get("summary", "Unable to generate summary.")
         
         if not summary or summary == "Unable to generate summary." or summary == "No content to summarize.":
             return {
                 "type": "single",
                 "summary": "No content available for summarization.", 
-                "documents": doc_ids, 
+                "documents": doc_ids,
+                "strategy": strategy,
                 "query": query
             }
         
-        # Refine summary to meet length requirement
-        summary = summary.strip()
-        target = {"short": "≈3 sentences", "medium": "≈8 sentences", "long": "≈15 sentences"}[length]
-        
-        if query:
-            refinement_prompt = f"Rewrite this summary so it fits {target} while preserving key info, focusing on aspects related to: {query}:\n\n{summary}"
+        # For non-extractive strategies, refine summary to meet length requirement
+        if strategy != "extractive":
+            summary = summary.strip()
+            target = {"short": "≈3 sentences", "medium": "≈8 sentences", "long": "≈15 sentences"}[length]
+            
+            if query:
+                refinement_prompt = f"Rewrite this summary so it fits {target} while preserving key info, focusing on aspects related to: {query}:\n\n{summary}"
+            else:
+                refinement_prompt = f"Rewrite this summary so it fits {target} while preserving key info:\n\n{summary}"
+            
+            refined = llm.invoke(refinement_prompt)
+            final_summary = refined.content.strip() if hasattr(refined, 'content') else str(refined).strip()
         else:
-            refinement_prompt = f"Rewrite this summary so it fits {target} while preserving key info:\n\n{summary}"
-        
-        refined = llm.invoke(refinement_prompt)
-        final_summary = refined.content.strip() if hasattr(refined, 'content') else str(refined).strip()
+            final_summary = summary
         
         result = {
             "type": "single",
             "summary": final_summary, 
             "documents": doc_ids,
             "chunks_processed": len(docs),
+            "strategy": strategy,
             "search_method": search_method
         }
         

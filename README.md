@@ -210,5 +210,30 @@ Mock LLM via `langchain.chat_models.fake.FakeListChatModel` for CI.
 
 ---
 
+## 🏗️ System Architecture 
+
+This project uses a **unified graph architecture** powered by **LangGraph's Send API** for optimal parallel processing and state management.
+
+### **🔄 Unified Summary & Reflection Graph** 
+- **File**: `src/graphs/unified_summary_reflection.py`
+- **Purpose**: Handles ALL summarization tasks with strategy support
+- **Features**: 
+  - ✅ **True parallel processing** via Send API
+  - ✅ **Three summarization strategies**: Abstractive, Extractive, Hybrid
+  - ✅ **Built-in reflection capabilities** for quality improvement
+  - ✅ **Automatic result aggregation** and error handling
+  - ✅ **Strategy-aware topic enhancement**
+
+### **📝 Summarization Strategies**
+- **🎨 Abstractive**: AI generates new sentences by paraphrasing content (default)
+- **📋 Extractive**: Selects key sentences directly from original text  
+- **🔗 Hybrid**: Combines both - extracts key content, then refines with AI
+
+### **🛠️ Other Components**
+- **Ingestion Graph**: `src/graphs/ingestion.py` - Document processing
+- **API Layer**: `src/api/endpoints.py` - FastAPI endpoints with strategy support
+- **Services**: Document, parallel processing, and web content services
+- **UI**: Streamlit app with strategy selection dropdown
+
 © 2025 LangGraph Doc Service • MIT
 

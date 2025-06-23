@@ -60,6 +60,7 @@ class TopicSummary(BaseModel):
     chunks_processed: int
     status: str
     processing_time: float
+    strategy: str = Field(description="Summarization strategy used (abstractive, extractive, hybrid)")
     reflection_applied: Optional[bool] = False
     changes_made: Optional[List[str]] = None
     initial_evaluation: Optional[dict] = None
@@ -79,6 +80,7 @@ class MultiTopicSummaryResponse(BaseModel):
     summaries: List[TopicSummary]
     documents: List[str]
     topics: List[str]
+    strategy: str = Field(description="Summarization strategy used")
     total_chunks_processed: int
     successful_topics: int
     total_topics: int
@@ -94,6 +96,7 @@ class SingleSummaryResponse(BaseModel):
     summary: str
     documents: List[str]
     chunks_processed: int
+    strategy: str = Field(description="Summarization strategy used")
     query: Optional[str] = None
     search_method: str
 

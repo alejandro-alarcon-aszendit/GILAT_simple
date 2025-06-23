@@ -314,12 +314,35 @@ elif page == "📝 Summarize":
         
         # Summary options
         st.subheader("📏 Summary Options")
-        length = st.selectbox(
-            "Summary length:",
-            ["short", "medium", "long"],
-            index=1,
-            help="Choose summary length: short (≈3 sentences), medium (≈8 sentences), long (≈15 sentences)"
-        )
+        
+        # Strategy selection
+        col1, col2 = st.columns(2)
+        with col1:
+            strategy = st.selectbox(
+                "📝 Summarization strategy:",
+                ["abstractive", "extractive", "hybrid"],
+                index=0,
+                help="""Choose how summaries are generated:
+• **Abstractive**: AI generates new sentences by paraphrasing and synthesizing content (like human-written summaries)
+• **Extractive**: Selects and extracts key sentences directly from the original text (like highlighting important parts)
+• **Hybrid**: Combines both approaches - first extracts key content, then refines it using AI"""
+            )
+        
+        with col2:
+            length = st.selectbox(
+                "📏 Summary length:",
+                ["short", "medium", "long"],
+                index=1,
+                help="Choose summary length: short (≈3 sentences), medium (≈8 sentences), long (≈15 sentences)"
+            )
+        
+        # Strategy explanation
+        if strategy == "extractive":
+            st.info("🔍 **Extractive**: Will select the most important sentences from your documents based on word frequency and relevance scoring.")
+        elif strategy == "abstractive":
+            st.info("✍️ **Abstractive**: Will generate new, paraphrased sentences that capture the essence of your documents.")
+        elif strategy == "hybrid":
+            st.info("🔀 **Hybrid**: Will first extract key sentences, then use AI to refine them into a more coherent summary.")
         
         # Generate summary button
         can_generate = True
@@ -333,7 +356,8 @@ elif page == "📝 Summarize":
             # Prepare parameters
             params = {
                 "doc_id": doc_ids,
-                "length": length
+                "length": length,
+                "strategy": strategy
             }
             
             # Add query parameters if in focused mode
@@ -378,7 +402,8 @@ elif page == "📝 Summarize":
                                 # Summary content
                                 if status == 'success':
                                     st.write(summary_text)
-                                    st.caption(f"📊 {chunks} chunks processed")
+                                    topic_strategy = summary_data.get('strategy', strategy)
+                                    st.caption(f"📊 {chunks} chunks processed • Strategy: {topic_strategy}")
                                 elif status == 'no_content':
                                     st.info(summary_text)
                                 else:
@@ -390,10 +415,21 @@ elif page == "📝 Summarize":
                         with st.expander("📊 Overall Summary Details"):
                             st.write(f"**Documents processed:** {len(result.get('documents', []))}")
                             st.write(f"**Summary length:** {length}")
+                            st.write(f"**Summarization strategy:** {result.get('strategy', strategy)}")
                             st.write(f"**Total chunks processed:** {result.get('total_chunks_processed', 'N/A')}")
                             st.write(f"**Search method:** {result.get('search_method', 'N/A')}")
                             st.write(f"**Topics:** {', '.join(result.get('topics', []))}")
-                            st.info("💡 Each topic was processed in parallel using vector similarity search to find the most relevant content.")
+                            
+                            # Strategy-specific info
+                            used_strategy = result.get('strategy', strategy)
+                            if used_strategy == "extractive":
+                                st.info("🔍 **Extractive Strategy**: Summaries contain key sentences selected directly from your documents.")
+                            elif used_strategy == "abstractive":
+                                st.info("✍️ **Abstractive Strategy**: Summaries contain AI-generated sentences that paraphrase and synthesize the content.")
+                            elif used_strategy == "hybrid":
+                                st.info("🔀 **Hybrid Strategy**: Summaries combine extracted key sentences refined by AI for better coherence.")
+                            
+                            st.caption("💡 Each topic was processed in parallel using vector similarity search to find the most relevant content.")
                     
                     # Handle single summary results  
                     elif 'summary' in result:
@@ -404,12 +440,24 @@ elif page == "📝 Summarize":
                         with st.expander("📊 Summary Details"):
                             st.write(f"**Documents processed:** {len(result.get('documents', []))}")
                             st.write(f"**Summary length:** {length}")
+                            st.write(f"**Summarization strategy:** {result.get('strategy', strategy)}")
                             st.write(f"**Chunks processed:** {result.get('chunks_processed', 'N/A')}")
                             st.write(f"**Search method:** {result.get('search_method', 'N/A')}")
                             
                             if result.get('query'):
                                 st.write(f"**Focus query:** {result.get('query')}")
-                                st.info("💡 This summary was generated using vector similarity search to find the most relevant content for your query.")
+                            
+                            # Strategy-specific info
+                            used_strategy = result.get('strategy', strategy)
+                            if used_strategy == "extractive":
+                                st.info("🔍 **Extractive Strategy**: Summary contains key sentences selected directly from your documents.")
+                            elif used_strategy == "abstractive":
+                                st.info("✍️ **Abstractive Strategy**: Summary contains AI-generated sentences that paraphrase and synthesize the content.")
+                            elif used_strategy == "hybrid":
+                                st.info("🔀 **Hybrid Strategy**: Summary combines extracted key sentences refined by AI for better coherence.")
+                            
+                            if result.get('query'):
+                                st.caption("💡 This summary was generated using vector similarity search to find the most relevant content for your query.")
                     
                     else:
                         st.error("❌ Unexpected response format from the API.")

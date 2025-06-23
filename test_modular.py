@@ -25,8 +25,8 @@ def test_imports():
         
         # Graphs
         from src.graphs.ingestion import INGESTION_GRAPH
-        from src.graphs.summary import SUMMARY_GRAPH, MULTI_TOPIC_SUMMARY_GRAPH
-        from src.graphs.reflection import REFLECTION_GRAPH
+        # Legacy graphs removed - now using unified approach only
+        from src.graphs.unified_summary_reflection import UNIFIED_SUMMARY_REFLECTION_GRAPH
         print("  ✅ Graphs imported")
         
         # API
