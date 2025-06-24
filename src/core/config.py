@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # -------------------- Database Configuration --------------------
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/app.db")
 
 # -------------------- File Storage Configuration ----------------
 BASE_DIR = Path("vector_db")

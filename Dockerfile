@@ -19,7 +19,7 @@ COPY src/ ./src/
 COPY streamlit_app.py .
 
 # Create necessary directories
-RUN mkdir -p vector_db
+RUN mkdir -p vector_db data
 
 # Activate the virtual environment by updating PATH
 ENV PATH="/app/.venv/bin:$PATH"

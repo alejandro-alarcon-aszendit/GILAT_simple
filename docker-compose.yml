@@ -11,7 +11,7 @@ services:
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
     volumes:
       - ./vector_db:/app/vector_db
-      - ./app.db:/app/app.db
+      - ./data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -31,7 +31,7 @@ services:
       - API_BASE_URL=http://api:8000
     volumes:
       - ./vector_db:/app/vector_db
-      - ./app.db:/app/app.db
+      - ./data:/app/data
     depends_on:
       - api
     restart: unless-stopped
