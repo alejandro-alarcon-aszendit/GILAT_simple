@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gilat-document-service"
+version = "1.0.0"
+description = "A sophisticated modular document processing service built around LangGraph workflows"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "GILAT Team"}
+]
+
+dependencies = [
+    # Core web framework and ASGI server
+    "fastapi",
+    "uvicorn[standard]",
+    
+    # LangChain ecosystem
+    "langchain",
+    "langchain-openai",
+    "langchain-community",
+    "langgraph",
+    
+    # Database and ORM
+    "sqlmodel",
+    "sqlalchemy",
+    "psycopg2-binary",
+    
+    # Document processing
+    "docling",
+    
+    # Vector database
+    "chromadb",
+    "langchain-chroma",
+    
+    # Text processing and utilities
+    "tiktoken",
+    "numpy",
+    
+    # Additional dependencies for document handling
+    "pydantic",
+    "python-dotenv",
+    "PyJWT",
+    "python-multipart",
+    
+    # UI and API client
+    "streamlit",
+    "requests",
+    
+    # Web content fetching
+    "firecrawl-py",
+    "beautifulsoup4",
+    "lxml",
+    "aiohttp",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "black",
+    "flake8",
+    "mypy",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"] 

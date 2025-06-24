@@ -76,7 +76,16 @@ src/
    ```bash
    git clone <repository>
    cd GILAT_simple
-   uv pip install -r requirements.txt
+   
+   # Using uv (recommended)
+   uv venv
+   source .venv/bin/activate
+   uv sync
+   
+   # Or using pip
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -e .
    ```
 
 2. **Configure environment:**

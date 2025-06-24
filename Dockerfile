@@ -10,9 +10,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && pip install uv
 
-# Copy requirements and install Python dependencies with uv
-COPY requirements.txt .
-RUN uv pip install --system --no-cache -r requirements.txt
+# Copy pyproject.toml and install Python dependencies with uv
+COPY pyproject.toml .
+RUN uv sync
 
 # Copy the source code
 COPY src/ ./src/
