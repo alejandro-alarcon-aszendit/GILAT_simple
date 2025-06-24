@@ -1,4 +1,4 @@
-# LangGraph Document Processing Service v2.0
+# LangGraph Document Processing Service
 
 A sophisticated **modular document processing service** built around **LangGraph workflows** with a focus on **parallel processing**, **reusable subgraphs**, and **proper state management**. Features advanced AI-powered document analysis, cross-document similarity search, and production-ready deployment.
 
@@ -533,7 +533,6 @@ vector_db/
 
 ## 📋 Changelog
 
-### v2.0 (Current)
 - ✅ **LangGraph Architecture**: Send API for true parallel processing
 - ✅ **Modular Subgraphs**: Document Retrieval, Summarization, Reflection subgraphs  
 - ✅ **Cross-Document Ranking**: Concurrent vector queries with global similarity scoring
