@@ -11,6 +11,7 @@ from src.core.auth import jwt_auth
 from src.models.schemas import DocOut, QAResponse
 from src.api.endpoints import DocumentEndpoints, SummaryEndpoints, QAEndpoints
 from src.api.auth_endpoints import AuthEndpoints, LoginRequest, LoginResponse
+from src.models.database import create_tables
 
 
 def create_app() -> FastAPI:
@@ -21,6 +22,18 @@ def create_app() -> FastAPI:
         version=APIConfig.VERSION,
         description=APIConfig.DESCRIPTION
     )
+    
+    # Add startup event to initialize database
+    @app.on_event("startup")
+    async def startup_event():
+        """Initialize database on application startup."""
+        print("Initializing database...")
+        try:
+            create_tables()
+            print("Database initialization completed.")
+        except Exception as e:
+            print(f"Database initialization failed: {e}")
+            # Don't fail the app startup for database issues in development
     
     # Add CORS middleware
     app.add_middleware(
