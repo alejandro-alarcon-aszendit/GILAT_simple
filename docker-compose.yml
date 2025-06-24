@@ -19,7 +19,7 @@ services:
       retries: 3
       start_period: 40s
     restart: unless-stopped
-    command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
   # Streamlit Frontend Service
   frontend:

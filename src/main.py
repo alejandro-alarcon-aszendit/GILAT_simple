@@ -58,6 +58,9 @@ def create_app() -> FastAPI:
     app.delete("/documents/{doc_id}", dependencies=[Depends(jwt_auth)])(
         DocumentEndpoints.delete_document
     )
+    app.get("/documents/{doc_id}/chunks", dependencies=[Depends(jwt_auth)])(
+        DocumentEndpoints.get_document_chunks
+    )
     
     # Summarization endpoints (with authentication)
     app.get("/summary", dependencies=[Depends(jwt_auth)])(
@@ -87,7 +90,8 @@ def create_app() -> FastAPI:
             "parallel_workloads": [
                 "Multi-topic summarization (LangGraph Send API)",
                 "Reflection system (integrated with Send API)",
-                "Document retrieval (concurrent vector searches)"
+                "Document retrieval (concurrent vector database queries)",
+                "Question answering (concurrent cross-document search)"
             ]
         }
     

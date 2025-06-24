@@ -44,6 +44,9 @@ class ParallelConfig:
     # Maximum concurrent workers for LangGraph parallel processing
     MAX_TOPIC_WORKERS = 5  # For multi-topic summary processing via LangGraph Send API
     
+    # Maximum concurrent workers for database queries
+    MAX_DB_QUERY_WORKERS = 8  # For concurrent vector store queries across documents
+    
     # Timeouts and limits
     PROCESSING_TIMEOUT = 300  # 5 minutes
     MAX_CHUNKS_PER_TOPIC = 20  # Limit chunks for reflection to avoid token limits

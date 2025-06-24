@@ -8,11 +8,60 @@ This module contains the three core summarization strategies:
 
 import re
 from typing import List
-from collections import Counter
 from langchain.docstore.document import Document
 from langchain.chains.summarize import load_summarize_chain
 
 from src.core.config import LLMConfig
+
+
+def _balance_content_across_documents(docs: List[Document], max_length: int) -> str:
+    """Balance content representation across all documents to ensure fair inclusion.
+    
+    This function ensures that content from all documents is represented proportionally
+    in the combined text, preventing early documents from dominating due to truncation.
+    
+    Args:
+        docs: List of documents to combine
+        max_length: Maximum total character length for combined content
+        
+    Returns:
+        Balanced combined text with representation from all documents
+    """
+    if not docs:
+        return ""
+    
+    # Calculate target length per document
+    target_per_doc = max_length // len(docs)
+    
+    # Reserve some space for separation and truncation notices
+    separator_overhead = len(docs) * 10  # Account for separators
+    available_per_doc = max(100, (max_length - separator_overhead) // len(docs))
+    
+    balanced_parts = []
+    for i, doc in enumerate(docs):
+        content = doc.page_content.strip()
+        if len(content) <= available_per_doc:
+            # If document fits, use it as-is
+            balanced_parts.append(content)
+        else:
+            # If document is too long, take a representative portion
+            # Take from beginning and end to capture introduction and conclusion
+            half_length = available_per_doc // 2 - 20  # Reserve space for ellipsis
+            start_part = content[:half_length]
+            end_part = content[-half_length:]
+            balanced_parts.append(f"{start_part}\n...[middle content omitted]...\n{end_part}")
+    
+    # Combine parts with document separators
+    combined_parts = []
+    for i, part in enumerate(balanced_parts, 1):
+        combined_parts.append(f"--- Document {i} ---\n{part}")
+    combined = "\n\n".join(combined_parts)
+    
+    # Final check and truncation if still too long
+    if len(combined) > max_length:
+        combined = combined[:max_length-50] + "\n\n[Final content truncated...]"
+    
+    return combined
 
 
 def extractive_summarization(docs: List[Document], query_context: str = "") -> dict:
@@ -33,13 +82,9 @@ def extractive_summarization(docs: List[Document], query_context: str = "") -> d
         return {"summary": "No content to summarize."}
     
     try:
-        # Combine all document content
-        combined_text = "\n".join([doc.page_content for doc in docs])
-        
-        # Truncate if too long for processing
-        max_length = 8000  # Reasonable limit for LLM processing
-        if len(combined_text) > max_length:
-            combined_text = combined_text[:max_length] + "\n\n[Content truncated...]"
+        # Use balanced content combination to ensure all documents are represented
+        max_length = 50000  # Increased limit for multi-document processing
+        combined_text = _balance_content_across_documents(docs, max_length)
         
         # Create focused extraction prompt
         focus_instruction = f"with special focus on: {query_context}" if query_context else ""
@@ -127,13 +172,9 @@ def abstractive_summarization(docs: List[Document], query_context: str = "") -> 
     try:
         llm = LLMConfig.MAIN_LLM
         
-        # Combine content for processing
-        combined_content = "\n".join([doc.page_content for doc in docs])
-        
-        # Truncate if too long
-        max_length = 8000
-        if len(combined_content) > max_length:
-            combined_content = combined_content[:max_length] + "\n\n[Content truncated...]"
+        # Use balanced content combination to ensure all documents are represented
+        max_length = 50000  # Increased limit for multi-document processing
+        combined_content = _balance_content_across_documents(docs, max_length)
         
         # Create focused abstractive prompt
         focus_instruction = f"Pay special attention to information related to: {query_context}" if query_context else ""
@@ -198,11 +239,9 @@ def hybrid_summarization(docs: List[Document], query_context: str = "") -> dict:
             # Fallback to pure abstractive if extraction fails
             return abstractive_summarization(docs, query_context)
         
-        # Step 2: Get original content for additional context
-        combined_content = "\n".join([doc.page_content for doc in docs])
-        max_context_length = 4000  # Limit context for the hybrid processing
-        if len(combined_content) > max_context_length:
-            combined_content = combined_content[:max_context_length] + "\n\n[Additional content available...]"
+        # Step 2: Get original content for additional context with balanced representation
+        max_context_length = 50000  # Increased limit for multi-document processing
+        combined_content = _balance_content_across_documents(docs, max_context_length)
         
         # Step 3: Use LLM to create hybrid summary combining quotes with synthesis
         llm = LLMConfig.MAIN_LLM

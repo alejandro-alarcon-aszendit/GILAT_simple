@@ -179,17 +179,19 @@ class DocumentService:
             doc_id: Document identifier
             
         Returns:
-            List of Document objects
-            
-        Raises:
-            FileNotFoundError: If chunks file doesn't exist
+            List of Document objects (empty list if file doesn't exist)
         """
-        file_path = BASE_DIR / doc_id / CHUNK_FILE
-        if not file_path.exists():
-            raise FileNotFoundError(f"Chunks file not found for document {doc_id}")
+        chunk_file = BASE_DIR / doc_id / CHUNK_FILE
         
-        texts = json.loads(file_path.read_text(encoding="utf-8"))
-        return [Document(page_content=text) for text in texts]
+        if not chunk_file.exists():
+            return []
+        
+        try:
+            with open(chunk_file, 'r', encoding='utf-8') as f:
+                chunk_data = json.load(f)
+            return [Document(page_content=chunk) for chunk in chunk_data]
+        except Exception:
+            return []
     
     @staticmethod
     def ingest_document(doc_id: str, tmp_path: str, filename: str) -> int:

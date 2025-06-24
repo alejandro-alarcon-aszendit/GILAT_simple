@@ -6,6 +6,7 @@ Supports both file uploads and URL content fetching.
 
 import shutil
 from typing import List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import File, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse
 from sqlmodel import select
@@ -149,6 +150,26 @@ class DocumentEndpoints:
             shutil.rmtree(vs_dir, ignore_errors=True)
         
         return {"status": "deleted", "doc_id": doc_id}
+    
+    @staticmethod
+    async def get_document_chunks(doc_id: str):
+        """Get document chunks as JSON format.
+        
+        Args:
+            doc_id: Document identifier
+            
+        Returns:
+            Document chunks with metadata
+        """
+        try:
+            chunks = DocumentService.load_document_chunks(doc_id)
+            return {
+                "doc_id": doc_id,
+                "chunks": [{"content": chunk.page_content} for chunk in chunks],
+                "total_chunks": len(chunks)
+            }
+        except Exception as e:
+            raise HTTPException(404, f"Document chunks not found: {str(e)}")
 
 
 class SummaryEndpoints:
@@ -156,38 +177,49 @@ class SummaryEndpoints:
     
     @staticmethod
     async def multi_summary(
-        doc_id: List[str] = Query(...),
+        doc_id: List[str] = Query(None, description="Document IDs to summarize. If not provided with a query, all ready documents will be used for topic-focused search."),
         length: int = Query(8, ge=1, le=30, description="Number of sentences for the summary (1-30)"),
         strategy: str = Query("abstractive", enum=["abstractive", "extractive", "hybrid"], description="Summarization strategy: abstractive (generates new sentences), extractive (selects key sentences), hybrid (combines both approaches)"),
-        query: str = Query(None, description="Optional query/topic(s) to focus the summary on. Use commas to separate multiple topics for parallel processing."),
+        query: str = Query(None, description="Optional query/topic(s) to focus the summary on. Use commas to separate multiple topics for parallel processing. When provided without doc_id, searches across all documents."),
         top_k: int = Query(10, description="Number of most relevant chunks to include when using query-focused summarization"),
         enable_reflection: bool = Query(False, description="Enable AI reflection to review and improve summary quality, accuracy, and length compliance"),
     ):
         """Generate summaries for multiple documents.
         
         **Processing Modes:**
-        1. **Full Document**: Summarizes all content if no query provided
+        1. **Full Document**: Summarizes all content if no query provided (requires doc_id)
         2. **Single Topic**: Uses vector similarity search for focused summary
         3. **Multi-Topic Parallel**: Processes multiple comma-separated topics in parallel with optional reflection
+        4. **All-Document Topic Search**: When query provided without doc_id, searches across all ready documents
         
         **Parallel Workloads:**
         - Multi-topic processing uses ThreadPoolExecutor for true parallelism
         - Each topic processed independently with performance monitoring
         - Optional reflection system for quality improvement
         """
-        # Validate document readiness
-        with get_db_session() as session:
-            docs_meta = session.exec(select(Doc).where(Doc.id.in_(doc_id))).all()
-        not_ready = [d.id for d in docs_meta if d.status != "ready"]
-        if not_ready:
-            raise HTTPException(409, f"Documents not ready: {not_ready}")
-
-        # Parse query for topics (single or multiple)
+        
+        # Handle different input scenarios
         if query and query.strip():
+            # Topic-focused processing (with or without specific documents)
             topics = [topic.strip() for topic in query.split(",") if topic.strip()]
             
+            # If no specific documents provided, use all ready documents
+            if not doc_id:
+                with get_db_session() as session:
+                    all_docs = session.exec(select(Doc).where(Doc.status == "ready")).all()
+                    if not all_docs:
+                        raise HTTPException(404, "No ready documents found for topic search")
+                    doc_id = [doc.id for doc in all_docs]
+                    print(f"🌍 Using all {len(doc_id)} ready documents for topic search: {topics}")
+            else:
+                # Validate selected documents
+                with get_db_session() as session:
+                    docs_meta = session.exec(select(Doc).where(Doc.id.in_(doc_id))).all()
+                not_ready = [d.id for d in docs_meta if d.status != "ready"]
+                if not_ready:
+                    raise HTTPException(409, f"Documents not ready: {not_ready}")
+            
             # Always use parallel processing for topic-based queries (single or multiple)
-            # This ensures consistent processing and parallel workflow visibility
             return await SummaryEndpoints._process_multi_topic(
                 topics=topics,
                 doc_ids=doc_id,
@@ -197,8 +229,18 @@ class SummaryEndpoints:
                 enable_reflection=enable_reflection
             )
         
-        # Full document processing
+        # Full document processing (requires specific documents)
         else:
+            if not doc_id:
+                raise HTTPException(400, "doc_id is required when no query is provided for full document summarization")
+            
+            # Validate document readiness
+            with get_db_session() as session:
+                docs_meta = session.exec(select(Doc).where(Doc.id.in_(doc_id))).all()
+            not_ready = [d.id for d in docs_meta if d.status != "ready"]
+            if not_ready:
+                raise HTTPException(409, f"Documents not ready: {not_ready}")
+            
             return await SummaryEndpoints._process_full_documents(
                 doc_ids=doc_id,
                 length=length,
@@ -297,7 +339,157 @@ class SummaryEndpoints:
     
     @staticmethod
     async def _process_full_documents(doc_ids, length, strategy):
-        """Process full documents without query filtering."""
+        """Process full documents using the existing parallel topic processing system."""
+        from src.graphs.unified_summary_reflection import UNIFIED_SUMMARY_REFLECTION_GRAPH
+        
+        if len(doc_ids) == 1:
+            # Single document - use existing logic for backwards compatibility
+            from langchain.docstore.document import Document
+            
+            all_docs: List[Document] = []
+            all_docs.extend(DocumentService.load_document_chunks(doc_ids[0]))
+            
+            if not all_docs:
+                return {
+                    "type": "single",
+                    "summary": "No content available for summarization.", 
+                    "documents": doc_ids, 
+                    "query": None
+                }
+            
+            return await SummaryEndpoints._generate_summary(
+                docs=all_docs,
+                doc_ids=doc_ids,
+                query=None,
+                length=length,
+                search_method="full_document",
+                strategy=strategy
+            )
+        
+        # Multiple documents - process each document separately in parallel
+        print(f"🚀 Processing {len(doc_ids)} documents separately in parallel")
+        
+        # Process each document individually to avoid mixing chunks
+        summaries = []
+        
+        # Import here to avoid circular imports
+        from langchain.docstore.document import Document
+        
+        for i, doc_id in enumerate(doc_ids):
+            print(f"📄 Processing document {i+1}/{len(doc_ids)}: {doc_id}")
+            
+            # Load chunks for this specific document only
+            doc_chunks = DocumentService.load_document_chunks(doc_id)
+            
+            if not doc_chunks:
+                print(f"⚠️ No chunks found for document {doc_id}")
+                continue
+            
+            # Generate summary for this document
+            try:
+                doc_summary = await SummaryEndpoints._generate_summary(
+                    docs=doc_chunks,
+                    doc_ids=[doc_id],  # Single document
+                    query=None,
+                    length=length,
+                    search_method=f"full_document_{i+1}",
+                    strategy=strategy
+                )
+                
+                # Extract just the summary text
+                summary_text = doc_summary.get("summary", "")
+                if summary_text and summary_text != "No content available for summarization.":
+                    summaries.append({
+                        "document_id": doc_id,
+                        "document_index": i + 1,
+                        "summary": summary_text,
+                        "chunks_processed": len(doc_chunks)
+                    })
+                    print(f"✅ Generated summary for document {i+1} ({len(doc_chunks)} chunks)")
+                else:
+                    print(f"⚠️ No summary generated for document {i+1}")
+                    
+            except Exception as e:
+                print(f"❌ Error processing document {doc_id}: {str(e)}")
+                continue
+        
+        # Return results based on number of successful summaries
+        if not summaries:
+            return {
+                "type": "single",
+                "summary": "No content available for summarization.",
+                "documents": doc_ids,
+                "query": None
+            }
+        
+        # Now aggregate if multiple summaries exist
+        if len(summaries) == 1:
+            # Single successful summary
+            return {
+                "type": "single",
+                "summary": summaries[0]["summary"],
+                "documents": doc_ids,
+                "chunks_processed": summaries[0]["chunks_processed"],
+                "search_method": "single_document_processing",
+                "strategy": strategy,
+                "query": None
+            }
+        
+        # Multiple summaries - aggregate them
+        print(f"🔄 Aggregating {len(summaries)} document summaries...")
+        
+        from src.core.config import LLMConfig
+        llm = LLMConfig.MAIN_LLM
+        
+        # Create individual summary texts
+        individual_summaries = []
+        total_chunks = 0
+        
+        for summary in summaries:
+            summary_text = summary["summary"]
+            if summary_text:
+                individual_summaries.append(f"Document {summary['document_index']}: {summary_text}")
+                total_chunks += summary.get("chunks_processed", 0)
+        
+        if not individual_summaries:
+            summary_text = "No content available for summarization."
+        elif len(individual_summaries) == 1:
+            summary_text = individual_summaries[0].replace("Document 1: ", "")
+        else:
+            combined = "\n\n".join(individual_summaries)
+            
+            aggregation_prompt = f"""Based on the following individual document summaries, create a comprehensive summary in exactly {length} sentences that captures the key information from all documents:
+
+{combined}
+
+Comprehensive Summary:"""
+            
+            try:
+                response = llm.invoke(aggregation_prompt)
+                summary_text = response.content.strip() if hasattr(response, 'content') else str(response).strip()
+                
+                if not summary_text:
+                    summary_text = " ".join(s.get("summary", "") for s in summaries if s.get("summary"))
+                    
+                print(f"✅ Successfully aggregated {len(summaries)} document summaries")
+            except Exception as e:
+                print(f"❌ Error aggregating summaries: {str(e)}")
+                summary_text = " ".join(s.get("summary", "") for s in summaries if s.get("summary"))
+        
+        return {
+            "type": "single",
+            "summary": summary_text,
+            "documents": doc_ids,
+            "chunks_processed": total_chunks,
+            "search_method": "parallel_document_processing",
+            "strategy": strategy,
+            "query": None,
+            "individual_summaries": len(summaries)
+        }
+    
+    @staticmethod
+    async def _process_full_documents_fallback(doc_ids, length, strategy):
+        """Fallback to sequential processing if parallel processing fails."""
         from langchain.docstore.document import Document
         
         all_docs: List[Document] = []
@@ -317,29 +509,13 @@ class SummaryEndpoints:
             doc_ids=doc_ids,
             query=None,
             length=length,
-            search_method="full_document",
+            search_method="full_document_fallback",
             strategy=strategy
         )
     
     @staticmethod
     async def _generate_summary(docs, doc_ids, query, length, search_method, strategy):
-        """Generate summary using the unified graph for single summaries."""
-        from src.graphs.unified_summary_reflection import UNIFIED_SUMMARY_REFLECTION_GRAPH
-        
-        # Create a fake topic to use the unified graph for single summaries
-        # This allows us to use the same strategy-aware logic
-        fake_topic = query if query else "document summary"
-        
-        # Prepare input for unified graph
-        unified_input = {
-            "topics": [fake_topic],
-            "doc_ids": [],  # Empty since we're providing docs directly
-            "top_k": 10,
-            "length": length,
-            "strategy": strategy,
-            "enable_reflection": False
-        }
-        
+        """Generate summary using strategy functions directly."""
         # Use the strategy functions from the utility module
         from src.utils.summarization_strategies import get_strategy_function
         
@@ -394,38 +570,74 @@ class QAEndpoints:
     @staticmethod
     async def ask_docs(
         q: str = Query(...),
-        doc_id: List[str] = Query(...),
+        doc_id: List[str] = Query(None, description="Document IDs to search. If not provided, searches across all ready documents."),
         top_k: int = 3,
     ):
         """Ask questions about documents using vector similarity search.
         
         **Processing Pipeline:**
-        1. Validate document readiness
-        2. Retrieve relevant chunks using vector similarity
-        3. Generate answer using LLM with retrieved context
+        1. Determine document scope (specific docs or all ready docs)
+        2. Validate document readiness
+        3. Retrieve relevant chunks using cross-document similarity ranking
+        4. Generate answer using LLM with retrieved context
         """
-        # Validate document readiness
-        with get_db_session() as session:
-            docs_meta = session.exec(select(Doc).where(Doc.id.in_(doc_id))).all()
-        not_ready = [d.id for d in docs_meta if d.status != "ready"]
-        if not_ready:
-            raise HTTPException(409, f"Documents not ready: {not_ready}")
+        # If no specific documents provided, use all ready documents
+        if not doc_id:
+            with get_db_session() as session:
+                all_docs = session.exec(select(Doc).where(Doc.status == "ready")).all()
+                if not all_docs:
+                    raise HTTPException(404, "No ready documents found for question answering")
+                doc_id = [doc.id for doc in all_docs]
+                print(f"🌍 Searching across all {len(doc_id)} ready documents for question: '{q}'")
+        else:
+            # Validate selected documents
+            with get_db_session() as session:
+                docs_meta = session.exec(select(Doc).where(Doc.id.in_(doc_id))).all()
+            not_ready = [d.id for d in docs_meta if d.status != "ready"]
+            if not_ready:
+                raise HTTPException(409, f"Documents not ready: {not_ready}")
 
-        # Retrieve relevant passages
+        # Retrieve relevant passages with concurrent cross-document similarity ranking
         from langchain.docstore.document import Document
-        retrieved: List[Document] = []
+        all_candidates = []
         retrieval_stats = {}
         
-        for d in doc_id:
-            try:
-                vs = DocumentService.load_vector_store(d)
-                doc_results = vs.similarity_search(q, k=top_k)
-                retrieved.extend(doc_results)
-                retrieval_stats[d] = len(doc_results)
-                print(f"📄 Retrieved {len(doc_results)} chunks from document {d}")
-            except Exception as e:
-                print(f"❌ Error retrieving from document {d}: {str(e)}")
-                retrieval_stats[d] = 0
+        print(f"🔍 Searching across {len(doc_id)} documents with concurrent cross-document ranking")
+        
+        # Get more candidates per document for better global ranking
+        candidates_per_doc = min(top_k * 2, 10)  # Get 2x requested or max 10 per doc
+        
+        # Execute queries concurrently using ThreadPoolExecutor
+        from src.core.config import ParallelConfig
+        with ThreadPoolExecutor(max_workers=min(len(doc_id), ParallelConfig.MAX_DB_QUERY_WORKERS)) as executor:
+            # Submit all document queries concurrently
+            future_to_doc_id = {
+                executor.submit(_query_single_document_qa, d, q, candidates_per_doc): d 
+                for d in doc_id
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_doc_id):
+                doc_id_key = future_to_doc_id[future]
+                try:
+                    candidates, returned_doc_id, retrieval_count = future.result()
+                    all_candidates.extend(candidates)
+                    retrieval_stats[returned_doc_id] = retrieval_count
+                except Exception as e:
+                    print(f"Error processing results for doc {doc_id_key}: {e}")
+                    retrieval_stats[doc_id_key] = 0
+        
+        # Sort by similarity score and take top-k globally
+        if all_candidates:
+            all_candidates.sort(key=lambda x: x[1])  # Sort by score (ascending = most similar first)
+            top_candidates = all_candidates[:top_k]
+            retrieved = [doc for doc, score, doc_id in top_candidates]
+            
+            print(f"✅ Selected {len(retrieved)} globally top-ranked chunks (concurrent retrieval)")
+            print(f"📊 Score range: {top_candidates[0][1]:.4f} to {top_candidates[-1][1]:.4f}")
+            print(f"🚀 Queried {len(doc_id)} documents concurrently")
+        else:
+            retrieved = []
 
         if not retrieved:
             return {
@@ -481,3 +693,11 @@ ANSWER:"""
             "total_chunks_retrieved": len(retrieved),
             "query": q
         }) 
+
+def _query_single_document_qa(doc_id: str, query: str, candidates_per_doc: int):
+    """Query a single document for QA. Helper function for concurrent execution.
+    
+    Uses the unified query function from topic_processing utilities.
+    """
+    from src.utils.topic_processing import query_single_document
+    return query_single_document(doc_id, query, candidates_per_doc, include_count=True) 

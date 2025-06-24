@@ -5,6 +5,7 @@ content for summarization and reflection processes.
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Tuple
 from langchain.docstore.document import Document
 
@@ -14,34 +15,102 @@ from src.utils.summarization_strategies import get_strategy_function
 from src.utils.reflection_utils import apply_reflection_to_summary
 
 
+def query_single_document(doc_id: str, query: str, candidates_per_doc: int, include_count: bool = False) -> Tuple[List[Tuple[Document, float, str]], str, int]:
+    """Query a single document for relevant chunks. Unified helper function for concurrent execution.
+    
+    Args:
+        doc_id: Document ID to query
+        query: Query/topic to search for
+        candidates_per_doc: Number of candidates to retrieve per document
+        include_count: Whether to include retrieval count in return
+        
+    Returns:
+        Tuple of (candidates_list, doc_id, retrieval_count)
+    """
+    try:
+        vs = DocumentService.load_vector_store(doc_id)
+        retrieved_with_scores = vs.similarity_search_with_score(query.strip(), k=candidates_per_doc)
+        
+        candidates = []
+        if retrieved_with_scores:
+            # Add document source metadata to each chunk
+            for doc, score in retrieved_with_scores:
+                doc.metadata = doc.metadata or {}
+                doc.metadata["source_doc_id"] = doc_id
+                doc.metadata["similarity_score"] = score
+                candidates.append((doc, score, doc_id))
+            
+            print(f"    📄 Query '{query}' found {len(retrieved_with_scores)} candidate chunks in document {doc_id}")
+        
+        return candidates, doc_id, len(retrieved_with_scores)
+        
+    except Exception as e:
+        print(f"Error retrieving docs for query '{query}' from doc {doc_id}: {e}")
+        return [], doc_id, 0
+
+
+# Backward compatibility wrapper
+def _query_single_document(doc_id: str, topic: str, candidates_per_doc: int) -> Tuple[List[Tuple[Document, float, str]], str]:
+    """Backward compatibility wrapper for the unified query function."""
+    candidates, doc_id_result, _ = query_single_document(doc_id, topic, candidates_per_doc)
+    return candidates, doc_id_result
+
+
 def retrieve_documents_for_topic(topic: str, doc_ids: List[str], top_k: int = 10) -> Tuple[List[Document], List[str]]:
-    """Retrieve relevant documents for a specific topic.
+    """Retrieve relevant documents for a specific topic with concurrent cross-document similarity ranking.
     
     Args:
         topic: Topic to search for
         doc_ids: List of document IDs to search in
-        top_k: Number of chunks to retrieve per document
+        top_k: Number of top-ranked chunks to retrieve globally
         
     Returns:
         Tuple of (relevant_documents, contributing_doc_ids)
     """
-    topic_relevant_docs = []
+    all_candidates = []
     doc_sources = []
     
-    # Collect relevant documents for this topic
-    for doc_id in doc_ids:
-        try:
-            vs = DocumentService.load_vector_store(doc_id)
-            retrieved = vs.similarity_search(topic.strip(), k=top_k)
-            if retrieved:
-                topic_relevant_docs.extend(retrieved)
-                doc_sources.append(doc_id)
-                print(f"    📄 Topic '{topic}' found {len(retrieved)} chunks in document {doc_id}")
-        except Exception as e:
-            print(f"Error retrieving docs for topic '{topic}' from doc {doc_id}: {e}")
-            continue
+    print(f"    🔍 Retrieving documents for topic '{topic}' with concurrent cross-document ranking")
     
-    return topic_relevant_docs, doc_sources
+    # Get more candidates per document for better global ranking
+    candidates_per_doc = min(top_k * 2, 20)  # Get 2x requested or max 20 per doc
+    
+    # Execute queries concurrently using ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(len(doc_ids), ParallelConfig.MAX_DB_QUERY_WORKERS)) as executor:
+        # Submit all document queries concurrently
+        future_to_doc_id = {
+            executor.submit(_query_single_document, doc_id, topic, candidates_per_doc): doc_id 
+            for doc_id in doc_ids
+        }
+        
+        # Collect results as they complete
+        for future in as_completed(future_to_doc_id):
+            doc_id = future_to_doc_id[future]
+            try:
+                candidates, returned_doc_id = future.result()
+                if candidates:
+                    all_candidates.extend(candidates)
+                    doc_sources.append(returned_doc_id)
+            except Exception as e:
+                print(f"Error processing results for topic '{topic}' from doc {doc_id}: {e}")
+                continue
+    
+    if not all_candidates:
+        return [], []
+    
+    # Sort by similarity score and take top-k globally
+    all_candidates.sort(key=lambda x: x[1])  # Sort by score (ascending = most similar first)
+    top_candidates = all_candidates[:top_k]
+    
+    # Extract documents and contributing doc IDs
+    topic_relevant_docs = [doc for doc, score, doc_id in top_candidates]
+    final_doc_sources = list(set(doc_id for doc, score, doc_id in top_candidates))
+    
+    print(f"    ✅ Selected {len(topic_relevant_docs)} globally top-ranked chunks for topic '{topic}' (concurrent retrieval)")
+    print(f"    📊 Score range: {top_candidates[0][1]:.4f} to {top_candidates[-1][1]:.4f}")
+    print(f"    🚀 Queried {len(doc_ids)} documents concurrently")
+    
+    return topic_relevant_docs, final_doc_sources
 
 
 def prepare_source_content(docs: List[Document]) -> str:
