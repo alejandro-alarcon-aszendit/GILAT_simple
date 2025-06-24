@@ -11,7 +11,7 @@ from src.core.config import LLMConfig
 from src.models.schemas import SummaryEvaluation, ImprovedSummary
 
 
-def apply_reflection_to_summary(summary_text: str, topic: str, length_requirement: str, source_content: str) -> dict:
+def apply_reflection_to_summary(summary_text: str, topic: str, length_requirement: int, source_content: str) -> dict:
     """Apply reflection to improve summary quality.
     
     This function evaluates a summary and potentially improves it using a two-step process:
@@ -21,7 +21,7 @@ def apply_reflection_to_summary(summary_text: str, topic: str, length_requiremen
     Args:
         summary_text: Original summary to evaluate and improve
         topic: Topic the summary should address
-        length_requirement: Length target (short/medium/long)
+        length_requirement: Length target (number of sentences)
         source_content: Original source content for factual verification
         
     Returns:
@@ -61,7 +61,7 @@ def apply_reflection_to_summary(summary_text: str, topic: str, length_requiremen
         }
 
 
-def _evaluate_summary(summary_text: str, topic: str, length_requirement: str, source_content: str) -> SummaryEvaluation:
+def _evaluate_summary(summary_text: str, topic: str, length_requirement: int, source_content: str) -> SummaryEvaluation:
     """Evaluate summary quality against multiple criteria.
     
     Args:
@@ -78,7 +78,7 @@ def _evaluate_summary(summary_text: str, topic: str, length_requirement: str, so
         template="""You are an expert content reviewer. Evaluate the following summary based on the specified criteria.
 
 **Topic**: {topic}
-**Length Requirement**: {length_requirement} (short ≈ 3 sentences, medium ≈ 8 sentences, long ≈ 15 sentences)
+**Length Requirement**: {length_requirement} sentences
 
 **Summary to Evaluate**:
 {summary_text}
@@ -111,7 +111,7 @@ Be thorough in your evaluation and specific about any issues found.
     return evaluation
 
 
-def _improve_summary(summary_text: str, topic: str, length_requirement: str, source_content: str, evaluation: SummaryEvaluation) -> ImprovedSummary:
+def _improve_summary(summary_text: str, topic: str, length_requirement: int, source_content: str, evaluation: SummaryEvaluation) -> ImprovedSummary:
     """Generate improved version of summary using conservative editing.
     
     Args:
@@ -136,7 +136,7 @@ def _improve_summary(summary_text: str, topic: str, length_requirement: str, sou
 5. When in doubt, err on the side of being conservative rather than comprehensive
 
 **Topic**: {topic}
-**Length Requirement**: {length_requirement} (short ≈ 3 sentences, medium ≈ 8 sentences, long ≈ 15 sentences)
+**Length Requirement**: {length_requirement} sentences
 
 **Original Summary**:
 {summary_text}

@@ -157,7 +157,7 @@ class SummaryEndpoints:
     @staticmethod
     async def multi_summary(
         doc_id: List[str] = Query(...),
-        length: str = Query("medium", enum=["short", "medium", "long"]),
+        length: int = Query(8, ge=1, le=30, description="Number of sentences for the summary (1-30)"),
         strategy: str = Query("abstractive", enum=["abstractive", "extractive", "hybrid"], description="Summarization strategy: abstractive (generates new sentences), extractive (selects key sentences), hybrid (combines both approaches)"),
         query: str = Query(None, description="Optional query/topic(s) to focus the summary on. Use commas to separate multiple topics for parallel processing."),
         top_k: int = Query(10, description="Number of most relevant chunks to include when using query-focused summarization"),
@@ -361,7 +361,7 @@ class SummaryEndpoints:
         # For non-extractive strategies, refine summary to meet length requirement
         if strategy != "extractive":
             summary = summary.strip()
-            target = {"short": "≈3 sentences", "medium": "≈8 sentences", "long": "≈15 sentences"}[length]
+            target = f"exactly {length} sentences"
             
             if query:
                 refinement_prompt = f"Rewrite this summary so it fits {target} while preserving key info, focusing on aspects related to: {query}:\n\n{summary}"

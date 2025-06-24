@@ -64,13 +64,13 @@ def prepare_source_content(docs: List[Document]) -> str:
     return source_content
 
 
-def enhance_summary_for_topic(summary: str, topic: str, length: str, strategy: str) -> str:
+def enhance_summary_for_topic(summary: str, topic: str, length: int, strategy: str) -> str:
     """Enhance summary with topic-specific context for non-extractive strategies.
     
     Args:
         summary: Initial summary text
         topic: Topic context
-        length: Target length (short/medium/long)
+        length: Target length (number of sentences)
         strategy: Summarization strategy used
         
     Returns:
@@ -80,7 +80,7 @@ def enhance_summary_for_topic(summary: str, topic: str, length: str, strategy: s
     if strategy == "extractive" or not summary or summary == "Unable to generate summary.":
         return summary
     
-    target = {"short": "≈3 sentences", "medium": "≈8 sentences", "long": "≈15 sentences"}[length]
+    target = f"exactly {length} sentences"
     enhanced_prompt = f"""
     Create a focused summary about "{topic}" based on the following content. 
     Keep it to {target} while emphasizing information most relevant to this specific topic.
@@ -104,7 +104,7 @@ def process_single_topic_complete(
     topic: str, 
     docs: List[Document],
     source_content: str,
-    length: str,
+    length: int,
     strategy: str,
     enable_reflection: bool
 ) -> Dict[str, Any]:

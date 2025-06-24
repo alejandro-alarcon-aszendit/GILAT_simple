@@ -21,7 +21,7 @@ class UnifiedState(TypedDict):
     topics: List[str]
     doc_ids: List[str]
     top_k: int
-    length: str
+    length: int
     strategy: str
     enable_reflection: bool
     
@@ -46,7 +46,7 @@ class TopicState(TypedDict):
     topic: str
     docs: List[Document]
     source_content: str
-    length: str
+    length: int
     strategy: str
     enable_reflection: bool
     contributing_docs: List[str]

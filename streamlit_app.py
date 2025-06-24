@@ -515,12 +515,28 @@ elif page == "📝 Summarize":
             )
         
         with col2:
-            length = st.selectbox(
+            length_option = st.selectbox(
                 "📏 Summary length:",
-                ["short", "medium", "long"],
+                ["short", "medium", "long", "custom"],
                 index=1,
-                help="Choose summary length: short (≈3 sentences), medium (≈8 sentences), long (≈15 sentences)"
+                help="Choose summary length: short (3 sentences), medium (8 sentences), long (15 sentences), or custom (choose exact number)"
             )
+            
+            # Map categorical values to numbers and handle custom
+            if length_option == "short":
+                length = 3
+            elif length_option == "medium":
+                length = 8
+            elif length_option == "long":
+                length = 15
+            else:  # custom
+                length = st.slider(
+                    "Number of sentences:",
+                    min_value=1,
+                    max_value=30,
+                    value=8,
+                    help="Select the exact number of sentences for your summary"
+                )
         
         # Strategy explanation
         if strategy == "extractive":
@@ -600,7 +616,7 @@ elif page == "📝 Summarize":
                         # Overall metadata
                         with st.expander("📊 Overall Summary Details"):
                             st.write(f"**Documents processed:** {len(result.get('documents', []))}")
-                            st.write(f"**Summary length:** {length}")
+                            st.write(f"**Summary length:** {length} sentences ({length_option})")
                             st.write(f"**Summarization strategy:** {result.get('strategy', strategy)}")
                             st.write(f"**Total chunks processed:** {result.get('total_chunks_processed', 'N/A')}")
                             st.write(f"**Search method:** {result.get('search_method', 'N/A')}")
@@ -625,7 +641,7 @@ elif page == "📝 Summarize":
                         # Show metadata
                         with st.expander("📊 Summary Details"):
                             st.write(f"**Documents processed:** {len(result.get('documents', []))}")
-                            st.write(f"**Summary length:** {length}")
+                            st.write(f"**Summary length:** {length} sentences ({length_option})")
                             st.write(f"**Summarization strategy:** {result.get('strategy', strategy)}")
                             st.write(f"**Chunks processed:** {result.get('chunks_processed', 'N/A')}")
                             st.write(f"**Search method:** {result.get('search_method', 'N/A')}")
