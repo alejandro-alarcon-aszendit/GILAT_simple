@@ -12,12 +12,19 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# -------------------- Directory Setup (Auto-creation) -------------------
+# Ensure all required directories exist
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+VECTOR_DB_DIR = Path("vector_db")
+VECTOR_DB_DIR.mkdir(exist_ok=True)
+
 # -------------------- Database Configuration --------------------
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/app.db")
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR}/app.db")
 
 # -------------------- File Storage Configuration ----------------
-BASE_DIR = Path("vector_db")
-BASE_DIR.mkdir(exist_ok=True)
+BASE_DIR = VECTOR_DB_DIR
 CHUNK_FILE = "chunks.json"
 
 # -------------------- LLM Configuration -------------------------

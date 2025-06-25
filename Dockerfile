@@ -18,7 +18,7 @@ RUN uv sync
 COPY src/ ./src/
 COPY streamlit_app.py .
 
-# Create necessary directories
+# Create necessary directories (as backup, the app will also create them)
 RUN mkdir -p vector_db data
 
 # Activate the virtual environment by updating PATH
