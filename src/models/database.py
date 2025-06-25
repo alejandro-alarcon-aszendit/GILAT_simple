@@ -31,7 +31,8 @@ def get_database_url():
     """Get database URL with proper directory setup."""
     data_dir = setup_database_directory()
     db_path = data_dir / "app.db"
-    database_url = os.getenv("DATABASE_URL", f"sqlite:///{db_path}")
+    # Use absolute path for SQLite to avoid path issues
+    database_url = os.getenv("DATABASE_URL", f"sqlite:///{db_path.absolute()}")
     logger.info(f"Database URL: {database_url}")
     return database_url
 

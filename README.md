@@ -98,9 +98,11 @@ src/
    ```bash
    # Start API server
    python -m src.main
+
+   # Or uvicorn src.main:app [--reload] [--host <host>] [--port <port>] to start in custom host and port
    
    # Start UI (in another terminal)
-   streamlit run streamlit_app.py
+   streamlit run streamlit_app.py [--server.port <port>]
    ```
 
 4. **Access the application:**

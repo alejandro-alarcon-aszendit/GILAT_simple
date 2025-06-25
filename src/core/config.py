@@ -21,7 +21,7 @@ VECTOR_DB_DIR = Path("vector_db")
 VECTOR_DB_DIR.mkdir(exist_ok=True)
 
 # -------------------- Database Configuration --------------------
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR}/app.db")
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR.absolute()}/app.db")
 
 # -------------------- File Storage Configuration ----------------
 BASE_DIR = VECTOR_DB_DIR

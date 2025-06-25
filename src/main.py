@@ -4,6 +4,7 @@ Modular FastAPI application with clear structure and parallel workload visibilit
 Supports both file uploads and URL content fetching with authentication and CORS.
 """
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from src.core.config import APIConfig
@@ -18,26 +19,72 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Global variables to store initialized heavy dependencies
+_document_converter = None
+
+def get_document_converter():
+    """Get the pre-initialized document converter."""
+    global _document_converter
+    if _document_converter is None:
+        logger.warning("Document converter not initialized during startup, creating new instance")
+        from docling.document_converter import DocumentConverter
+        _document_converter = DocumentConverter()
+    return _document_converter
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan handler for startup and shutdown."""
+    global _document_converter
+    
+    # Startup
+    logger.info("Starting application initialization...")
+    
+    # 1. Initialize database
+    logger.info("Initializing database...")
+    try:
+        init_database()
+        logger.info("✅ Database initialization completed.")
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}")
+        # Don't fail the app startup for database issues in development
+    
+    # 2. Initialize heavy dependencies
+    logger.info("Initializing document processing dependencies...")
+    try:
+        from docling.document_converter import DocumentConverter
+        logger.info("Loading docling DocumentConverter (downloading models if needed)...")
+        _document_converter = DocumentConverter()
+        logger.info("✅ DocumentConverter initialized successfully.")
+    except Exception as e:
+        logger.error(f"❌ DocumentConverter initialization failed: {e}")
+        logger.warning("Document processing may be slower on first use.")
+    
+    # 3. Pre-warm other components if needed
+    try:
+        # Pre-import heavy dependencies to cache them
+        logger.info("Pre-loading other dependencies...")
+        from src.core.config import LLMConfig  # This loads OpenAI models
+        from langchain_chroma import Chroma  # Pre-load Chroma
+        logger.info("✅ Dependencies pre-loaded successfully.")
+    except Exception as e:
+        logger.error(f"❌ Dependency pre-loading failed: {e}")
+    
+    logger.info("🚀 Application startup completed!")
+    
+    yield
+    
+    # Shutdown (if needed)
+    logger.info("Application shutting down...")
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     
     app = FastAPI(
         title=APIConfig.TITLE,
         version=APIConfig.VERSION,
-        description=APIConfig.DESCRIPTION
+        description=APIConfig.DESCRIPTION,
+        lifespan=lifespan
     )
-    
-    # Add startup event to initialize database
-    @app.on_event("startup")
-    async def startup_event():
-        """Initialize database on application startup."""
-        logger.info("Initializing database...")
-        try:
-            init_database()
-            logger.info("Database initialization completed.")
-        except Exception as e:
-            logger.error(f"Database initialization failed: {e}")
-            # Don't fail the app startup for database issues in development
     
     # Add CORS middleware
     app.add_middleware(

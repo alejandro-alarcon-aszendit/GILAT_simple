@@ -12,7 +12,8 @@ from tempfile import NamedTemporaryFile
 
 from langchain.docstore.document import Document
 from langchain_chroma import Chroma
-from docling.document_converter import DocumentConverter
+# Note: DocumentConverter import moved to _get_document_converter() to avoid circular imports
+# and to use the pre-initialized converter from startup
 
 from src.core.config import BASE_DIR, CHUNK_FILE, embedder, splitter
 from src.models.database import Doc, get_db_session
@@ -21,6 +22,17 @@ from src.services.web_content_service import WebContentService
 
 class DocumentService:
     """Service for handling document operations."""
+    
+    @staticmethod
+    def _get_document_converter():
+        """Get the pre-initialized document converter from main module."""
+        try:
+            from src.main import get_document_converter
+            return get_document_converter()
+        except ImportError:
+            # Fallback for when running outside of FastAPI context
+            from docling.document_converter import DocumentConverter
+            return DocumentConverter()
     
     @staticmethod
     def get_supported_formats() -> dict:
@@ -78,7 +90,7 @@ class DocumentService:
                     text = f.read()
             elif file_extension in docling_formats:
                 # Use docling for all supported document formats
-                converter = DocumentConverter()
+                converter = DocumentService._get_document_converter()
                 result = converter.convert(file_path)
                 
                 # Check if conversion was successful
